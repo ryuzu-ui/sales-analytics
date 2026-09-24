@@ -38,6 +38,7 @@ function Dashboard() {
   const {
     monthlySales,
     topProducts,
+    salesRecords,
     summary,
     isImported,
     datasetName,
@@ -184,7 +185,7 @@ function Dashboard() {
 
           <strong>
             {isImported
-              ? summary.totalUnits.toLocaleString()
+              ? salesRecords.length.toLocaleString()
               : "—"}
           </strong>
         </div>

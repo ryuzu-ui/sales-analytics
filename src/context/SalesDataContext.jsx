@@ -45,10 +45,18 @@ function parseExcelDate(value) {
     }
   }
 
-  const parsed = new Date(value);
+  if (typeof value === "string") {
+    const trimmed = value.trim();
 
-  if (!Number.isNaN(parsed.getTime())) {
-    return parsed;
+    if (!trimmed) {
+      return null;
+    }
+
+    const parsed = new Date(trimmed);
+
+    if (!Number.isNaN(parsed.getTime())) {
+      return parsed;
+    }
   }
 
   return null;
@@ -115,19 +123,39 @@ function normalizeSalesRows(rows) {
     "Customer",
   ]);
 
-  if (!invoiceColumn || !quantityColumn || !dateColumn || !unitPriceColumn) {
+  if (
+    !invoiceColumn ||
+    !quantityColumn ||
+    !dateColumn ||
+    !unitPriceColumn
+  ) {
     throw new Error(
       "The dataset does not contain the required sales columns. Required fields include InvoiceNo, Quantity, InvoiceDate, and UnitPrice."
     );
   }
 
   const records = rows.map((row, index) => {
-    const quantity = Number(row[quantityColumn]) || 0;
-    const unitPrice = Number(row[unitPriceColumn]) || 0;
+    const rawQuantity = row[quantityColumn];
+    const rawUnitPrice = row[unitPriceColumn];
+
+    const quantity =
+      rawQuantity === "" ||
+      rawQuantity === null ||
+      rawQuantity === undefined
+        ? NaN
+        : Number(rawQuantity);
+
+    const unitPrice =
+      rawUnitPrice === "" ||
+      rawUnitPrice === null ||
+      rawUnitPrice === undefined
+        ? NaN
+        : Number(rawUnitPrice);
+
     const date = parseExcelDate(row[dateColumn]);
 
     const invoice = String(
-      row[invoiceColumn] ?? `ROW-${index + 1}`
+      row[invoiceColumn] ?? ""
     ).trim();
 
     const product = String(
@@ -146,16 +174,22 @@ function normalizeSalesRows(rows) {
       customerColumn ? row[customerColumn] ?? "" : ""
     ).trim();
 
+    const revenue =
+      Number.isFinite(quantity) &&
+      Number.isFinite(unitPrice)
+        ? quantity * unitPrice
+        : 0;
+
     return {
-      id: `${invoice}-${index + 1}`,
+      id: `${invoice || "ROW"}-${index + 1}`,
       invoiceNo: invoice,
       date: date ? date.toISOString() : "",
-      product: product || "Unknown Product",
+      product: product || "",
       category: "Uncategorized",
       quantity,
       unitPrice,
-      revenue: quantity * unitPrice,
-      region: country || "Unknown",
+      revenue,
+      region: country || "",
       stockCode,
       customerId,
       originalRow: row,
@@ -167,6 +201,240 @@ function normalizeSalesRows(rows) {
     sourceColumns: headers,
   };
 }
+
+/* ============================================================
+   DATA CLEANING
+   ============================================================ */
+
+function inspectRecords(records) {
+  const missing = records.reduce((count, row) => {
+    const fields = [
+      row.invoiceNo,
+      row.date,
+      row.product,
+      row.quantity,
+      row.unitPrice,
+      row.region,
+    ];
+
+    return (
+      count +
+      fields.filter(
+        (value) =>
+          value === null ||
+          value === undefined ||
+          value === "" ||
+          (typeof value === "number" &&
+            Number.isNaN(value))
+      ).length
+    );
+  }, 0);
+
+  const duplicateKeys = new Set();
+  let duplicateRecords = 0;
+
+  records.forEach((row) => {
+    const key = JSON.stringify([
+      row.invoiceNo,
+      row.stockCode,
+      row.product,
+      row.date,
+      row.quantity,
+      row.unitPrice,
+      row.region,
+    ]);
+
+    if (duplicateKeys.has(key)) {
+      duplicateRecords += 1;
+    } else {
+      duplicateKeys.add(key);
+    }
+  });
+
+  const invalidQuantity = records.filter(
+    (row) =>
+      !Number.isFinite(Number(row.quantity)) ||
+      Number(row.quantity) <= 0
+  ).length;
+
+  const invalidPrice = records.filter(
+    (row) =>
+      !Number.isFinite(Number(row.unitPrice)) ||
+      Number(row.unitPrice) <= 0
+  ).length;
+
+  const invalidDates = records.filter(
+    (row) => !row.date
+  ).length;
+
+  const missingProduct = records.filter(
+    (row) => !String(row.product || "").trim()
+  ).length;
+
+  const cancelledTransactions = records.filter(
+    (row) =>
+      String(row.invoiceNo || "")
+        .trim()
+        .toUpperCase()
+        .startsWith("C")
+  ).length;
+
+  const negativeRevenue = records.filter(
+    (row) => Number(row.revenue) < 0
+  ).length;
+
+  return {
+    missing,
+    duplicateRecords,
+    invalidQuantity,
+    invalidPrice,
+    invalidDates,
+    missingProduct,
+    cancelledTransactions,
+    negativeRevenue,
+  };
+}
+
+function cleanSalesRecords(rawRecords) {
+  const seen = new Set();
+
+  const cleaned = [];
+
+  const removedReasons = {
+    duplicates: 0,
+    cancelled: 0,
+    invalidQuantity: 0,
+    invalidPrice: 0,
+    invalidDate: 0,
+    missingInvoice: 0,
+    missingProduct: 0,
+  };
+
+  for (const row of rawRecords) {
+    const invoiceNo = String(
+      row.invoiceNo || ""
+    ).trim();
+
+    const product = String(
+      row.product || ""
+    ).trim();
+
+    const quantity = Number(row.quantity);
+    const unitPrice = Number(row.unitPrice);
+
+    /* --------------------------------------------------------
+       1. Remove missing invoice numbers
+    -------------------------------------------------------- */
+
+    if (!invoiceNo) {
+      removedReasons.missingInvoice += 1;
+      continue;
+    }
+
+    /* --------------------------------------------------------
+       2. Remove cancelled transactions
+          UCI Online Retail uses invoice numbers beginning with C
+    -------------------------------------------------------- */
+
+    if (invoiceNo.toUpperCase().startsWith("C")) {
+      removedReasons.cancelled += 1;
+      continue;
+    }
+
+    /* --------------------------------------------------------
+       3. Remove missing products
+    -------------------------------------------------------- */
+
+    if (!product) {
+      removedReasons.missingProduct += 1;
+      continue;
+    }
+
+    /* --------------------------------------------------------
+       4. Validate quantity
+    -------------------------------------------------------- */
+
+    if (
+      !Number.isFinite(quantity) ||
+      quantity <= 0
+    ) {
+      removedReasons.invalidQuantity += 1;
+      continue;
+    }
+
+    /* --------------------------------------------------------
+       5. Validate unit price
+    -------------------------------------------------------- */
+
+    if (
+      !Number.isFinite(unitPrice) ||
+      unitPrice <= 0
+    ) {
+      removedReasons.invalidPrice += 1;
+      continue;
+    }
+
+    /* --------------------------------------------------------
+       6. Validate date
+    -------------------------------------------------------- */
+
+    if (!row.date) {
+      removedReasons.invalidDate += 1;
+      continue;
+    }
+
+    const parsedDate = new Date(row.date);
+
+    if (Number.isNaN(parsedDate.getTime())) {
+      removedReasons.invalidDate += 1;
+      continue;
+    }
+
+    /* --------------------------------------------------------
+       7. Detect exact duplicate transaction rows
+    -------------------------------------------------------- */
+
+    const duplicateKey = JSON.stringify([
+      invoiceNo,
+      row.stockCode,
+      product,
+      row.date,
+      quantity,
+      unitPrice,
+      row.region,
+    ]);
+
+    if (seen.has(duplicateKey)) {
+      removedReasons.duplicates += 1;
+      continue;
+    }
+
+    seen.add(duplicateKey);
+
+    /* --------------------------------------------------------
+       8. Keep cleaned record
+    -------------------------------------------------------- */
+
+    cleaned.push({
+      ...row,
+      invoiceNo,
+      product,
+      quantity,
+      unitPrice,
+      revenue: quantity * unitPrice,
+      date: parsedDate.toISOString(),
+    });
+  }
+
+  return {
+    records: cleaned,
+    removedReasons,
+  };
+}
+
+/* ============================================================
+   ANALYTICS
+   ============================================================ */
 
 function calculateMonthlySales(records) {
   const monthlyMap = new Map();
@@ -181,7 +449,9 @@ function calculateMonthlySales(records) {
     const year = date.getFullYear();
     const month = date.getMonth();
 
-    const key = `${year}-${String(month + 1).padStart(2, "0")}`;
+    const key = `${year}-${String(
+      month + 1
+    ).padStart(2, "0")}`;
 
     if (!monthlyMap.has(key)) {
       monthlyMap.set(key, {
@@ -195,8 +465,8 @@ function calculateMonthlySales(records) {
 
     const entry = monthlyMap.get(key);
 
-    entry.revenue += record.revenue;
-    entry.quantity += record.quantity;
+    entry.revenue += Number(record.revenue) || 0;
+    entry.quantity += Number(record.quantity) || 0;
   });
 
   return Array.from(monthlyMap.values())
@@ -228,7 +498,8 @@ function calculateTopProducts(records) {
   const productMap = new Map();
 
   records.forEach((record) => {
-    const product = record.product || "Unknown Product";
+    const product =
+      record.product || "Unknown Product";
 
     if (!productMap.has(product)) {
       productMap.set(product, {
@@ -241,8 +512,8 @@ function calculateTopProducts(records) {
 
     const entry = productMap.get(product);
 
-    entry.sales += record.revenue;
-    entry.units += record.quantity;
+    entry.sales += Number(record.revenue) || 0;
+    entry.units += Number(record.quantity) || 0;
   });
 
   return Array.from(productMap.values())
@@ -252,12 +523,14 @@ function calculateTopProducts(records) {
 
 function calculateSummary(records, monthlySales) {
   const totalRevenue = records.reduce(
-    (sum, record) => sum + record.revenue,
+    (sum, record) =>
+      sum + (Number(record.revenue) || 0),
     0
   );
 
   const totalUnits = records.reduce(
-    (sum, record) => sum + record.quantity,
+    (sum, record) =>
+      sum + (Number(record.quantity) || 0),
     0
   );
 
@@ -276,27 +549,25 @@ function calculateSummary(records, monthlySales) {
 
   if (monthlySales.length >= 2) {
     const previous =
-      monthlySales[monthlySales.length - 2].revenue;
+      monthlySales[monthlySales.length - 2]
+        .revenue;
 
     const current =
-      monthlySales[monthlySales.length - 1].revenue;
+      monthlySales[monthlySales.length - 1]
+        .revenue;
 
     if (previous !== 0) {
       growth =
-        ((current - previous) / Math.abs(previous)) * 100;
+        ((current - previous) /
+          Math.abs(previous)) *
+        100;
     }
   }
 
-  const firstDate = records
+  const dates = records
     .map((record) => record.date)
     .filter(Boolean)
-    .sort()[0];
-
-  const lastDate = records
-    .map((record) => record.date)
-    .filter(Boolean)
-    .sort()
-    .at(-1);
+    .sort();
 
   return {
     totalRevenue,
@@ -304,17 +575,36 @@ function calculateSummary(records, monthlySales) {
     averageOrderValue,
     uniqueInvoices: uniqueInvoices.size,
     growth,
-    firstDate: firstDate || null,
-    lastDate: lastDate || null,
+    firstDate: dates[0] || null,
+    lastDate: dates.at(-1) || null,
   };
 }
 
+/* ============================================================
+   PROVIDER
+   ============================================================ */
+
 export function SalesDataProvider({ children }) {
+  const [rawRecords, setRawRecords] = useState([]);
   const [records, setRecords] = useState([]);
-  const [datasetName, setDatasetName] = useState("");
-  const [sourceColumns, setSourceColumns] = useState([]);
-  const [isImporting, setIsImporting] = useState(false);
-  const [importError, setImportError] = useState("");
+
+  const [datasetName, setDatasetName] =
+    useState("");
+
+  const [sourceColumns, setSourceColumns] =
+    useState([]);
+
+  const [isImporting, setIsImporting] =
+    useState(false);
+
+  const [importError, setImportError] =
+    useState("");
+
+  const [isCleaned, setIsCleaned] =
+    useState(false);
+
+  const [cleaningReport, setCleaningReport] =
+    useState(null);
 
   const importFile = async (file) => {
     if (!file) return;
@@ -328,13 +618,18 @@ export function SalesDataProvider({ children }) {
         .pop()
         .toLowerCase();
 
-      if (!["xlsx", "xls", "csv"].includes(extension)) {
+      if (
+        !["xlsx", "xls", "csv"].includes(
+          extension
+        )
+      ) {
         throw new Error(
           "Unsupported file type. Please upload CSV, XLS, or XLSX."
         );
       }
 
-      const buffer = await file.arrayBuffer();
+      const buffer =
+        await file.arrayBuffer();
 
       const workbook = XLSX.read(buffer, {
         type: "array",
@@ -342,16 +637,24 @@ export function SalesDataProvider({ children }) {
       });
 
       if (!workbook.SheetNames.length) {
-        throw new Error("The uploaded file does not contain a worksheet.");
+        throw new Error(
+          "The uploaded file does not contain a worksheet."
+        );
       }
 
       const firstSheet =
-        workbook.Sheets[workbook.SheetNames[0]];
+        workbook.Sheets[
+          workbook.SheetNames[0]
+        ];
 
-      const rows = XLSX.utils.sheet_to_json(firstSheet, {
-        defval: "",
-        raw: true,
-      });
+      const rows =
+        XLSX.utils.sheet_to_json(
+          firstSheet,
+          {
+            defval: "",
+            raw: true,
+          }
+        );
 
       if (!rows.length) {
         throw new Error(
@@ -359,33 +662,100 @@ export function SalesDataProvider({ children }) {
         );
       }
 
-      const normalized = normalizeSalesRows(rows);
+      const normalized =
+        normalizeSalesRows(rows);
 
+      setRawRecords(normalized.records);
       setRecords(normalized.records);
-      setSourceColumns(normalized.sourceColumns);
+
+      setSourceColumns(
+        normalized.sourceColumns
+      );
+
       setDatasetName(file.name);
+
+      setIsCleaned(false);
+      setCleaningReport(null);
     } catch (error) {
-      console.error("Dataset import failed:", error);
+      console.error(
+        "Dataset import failed:",
+        error
+      );
 
       setImportError(
         error?.message ||
           "Unable to import the dataset."
       );
 
+      setRawRecords([]);
       setRecords([]);
       setSourceColumns([]);
       setDatasetName("");
+      setIsCleaned(false);
+      setCleaningReport(null);
     } finally {
       setIsImporting(false);
     }
   };
 
+  /* ==========================================================
+     CLEAN DATASET
+  ========================================================== */
+
+  const cleanDataset = () => {
+    if (!rawRecords.length) {
+      return;
+    }
+
+    const result =
+      cleanSalesRecords(rawRecords);
+
+    const inspection =
+      inspectRecords(rawRecords);
+
+    setRecords(result.records);
+    setIsCleaned(true);
+
+    setCleaningReport({
+      beforeRows: rawRecords.length,
+      afterRows: result.records.length,
+      removedRows:
+        rawRecords.length -
+        result.records.length,
+
+      inspection,
+
+      removedReasons:
+        result.removedReasons,
+
+      cleanedAt:
+        new Date().toISOString(),
+    });
+  };
+
+  /* ==========================================================
+     RESET TO RAW DATA
+  ========================================================== */
+
+  const resetToRawDataset = () => {
+    setRecords(rawRecords);
+    setIsCleaned(false);
+    setCleaningReport(null);
+  };
+
   const clearDataset = () => {
+    setRawRecords([]);
     setRecords([]);
     setSourceColumns([]);
     setDatasetName("");
     setImportError("");
+    setIsCleaned(false);
+    setCleaningReport(null);
   };
+
+  /* ==========================================================
+     DERIVED DATA
+  ========================================================== */
 
   const monthlySales = useMemo(
     () => calculateMonthlySales(records),
@@ -398,7 +768,11 @@ export function SalesDataProvider({ children }) {
   );
 
   const summary = useMemo(
-    () => calculateSummary(records, monthlySales),
+    () =>
+      calculateSummary(
+        records,
+        monthlySales
+      ),
     [records, monthlySales]
   );
 
@@ -406,7 +780,11 @@ export function SalesDataProvider({ children }) {
     return [
       "All",
       ...Array.from(
-        new Set(records.map((record) => record.category))
+        new Set(
+          records.map(
+            (record) => record.category
+          )
+        )
       ).filter(Boolean),
     ];
   }, [records]);
@@ -415,43 +793,78 @@ export function SalesDataProvider({ children }) {
     return [
       "All",
       ...Array.from(
-        new Set(records.map((record) => record.region))
+        new Set(
+          records.map(
+            (record) => record.region
+          )
+        )
       ).filter(Boolean),
     ];
   }, [records]);
 
   const value = {
+    /* Dataset */
+
     records,
+
     salesRecords: records,
 
+    rawRecords,
+
+    cleanedRecords: records,
+
+    sourceColumns,
+
+    datasetName,
+
+    isImported:
+      rawRecords.length > 0,
+
+    isCleaned,
+
+    /* Cleaning */
+
+    cleaningReport,
+
+    cleanDataset,
+
+    resetToRawDataset,
+
+    /* Import */
+
+    isImporting,
+
+    importError,
+
+    importFile,
+
+    clearDataset,
+
+    /* Analytics */
+
     monthlySales,
+
     topProducts,
 
     summary,
 
     categories,
+
     regions,
-
-    datasetName,
-    sourceColumns,
-
-    isImported: records.length > 0,
-    isImporting,
-    importError,
-
-    importFile,
-    clearDataset,
   };
 
   return (
-    <SalesDataContext.Provider value={value}>
+    <SalesDataContext.Provider
+      value={value}
+    >
       {children}
     </SalesDataContext.Provider>
   );
 }
 
 export function useSalesData() {
-  const context = useContext(SalesDataContext);
+  const context =
+    useContext(SalesDataContext);
 
   if (!context) {
     throw new Error(
