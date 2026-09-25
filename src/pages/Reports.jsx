@@ -2288,15 +2288,11 @@ function ForecastReport({
         </strong>
       </div>
 
-      <p>
-        The linear model provides a
-        baseline estimate based on the
-        historical monthly trend. The R²
-        value represents the proportion of
-        historical monthly variation
-        explained by the linear time trend;
-        it should not be interpreted as
-        forecast accuracy.
+      <p className="predictive-explanation">
+        The linear model provides a baseline estimate based on the historical monthly
+        trend. The R² value represents the proportion of historical monthly variation
+        explained by the linear time trend; it should not be interpreted as forecast
+        accuracy.
       </p>
     </div>
   );

@@ -6646,15 +6646,7 @@ select:focus-visible {
    FINAL STATUS
    --------------------------------------------------------- */
 
-.report-final {
-  display: flex;
-  align-items: flex-start;
-  gap: 15px;
-  padding: 22px;
-  background: #111111;
-  color: #fff;
-  box-shadow: 8px 8px 0 #5278e8;
-}
+
 
 .report-final-icon {
   width: 55px;
@@ -6672,9 +6664,22 @@ select:focus-visible {
   font-weight: 700;
 }
 
+.report-final {
+  display: flex;
+  align-items: flex-start;
+  gap: 15px;
+  padding: 22px;
+
+  background: #f5d547;
+  color: #111111;
+
+  border: 3px solid #111111;
+  box-shadow: 8px 8px 0 #111111;
+}
+
 .report-final h2 {
   margin: 4px 0 7px;
-  color: #f5d547;
+  color: #111111;
   font-family: "Darker Grotesque", sans-serif;
   font-size: 32px;
   line-height: 1;
@@ -6684,6 +6689,7 @@ select:focus-visible {
 .report-final p {
   max-width: 1000px;
   margin: 0;
+  color: #111111;
   font-family: "Public Sans", sans-serif;
   font-size: 11px;
   line-height: 1.5;
@@ -7539,4 +7545,81 @@ select:focus-visible {
 .app-shell.dark-mode .correlation-page,
 .app-shell.dark-mode .reports-page {
   color: #f3eee4;
+}
+
+/* =========================================================
+   PREDICTIVE ANALYSIS — MODEL EXPLANATION
+   ========================================================= */
+
+.predictive-explanation {
+  width: 100%;
+  margin-top: 18px;
+  padding: 18px 20px;
+  box-sizing: border-box;
+
+  background: #f7f7f7;
+  border: 2px solid #111111;
+  color: #222222;
+
+  font-size: 14px;
+  line-height: 1.7;
+  font-weight: 500;
+
+  box-shadow: 5px 5px 0 #111111;
+}
+
+
+/* =========================================================
+   REPORT — ANALYSIS COMPLETE
+   ========================================================= */
+
+.report-complete {
+  background: #f4c430 !important;
+  border: 2px solid #111111 !important;
+  color: #111111 !important;
+  box-shadow: 7px 7px 0 #111111 !important;
+}
+
+.report-complete h2,
+.report-complete h3,
+.report-complete p,
+.report-complete span {
+  color: #111111 !important;
+}
+
+.forecast-report {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+}
+
+.forecast-report > div {
+  padding: 16px;
+  background: #fff;
+  border: 3px solid #111111;
+}
+
+.forecast-report strong {
+  font-family: "Darker Grotesque", sans-serif;
+  font-size: 25px;
+  line-height: 1;
+  font-weight: 900;
+}
+
+/* Predictive Analysis explanation */
+.forecast-report p {
+  grid-column: 1 / -1;
+  margin: 0;
+  padding: 14px 16px;
+
+  background: #fff;
+  color: #111111;
+
+  border: 3px solid #111111;
+  box-shadow: 6px 6px 0 #111111;
+
+  font-family: "Public Sans", sans-serif;
+  font-size: 11px;
+  line-height: 1.6;
+  font-weight: 600;
 }
