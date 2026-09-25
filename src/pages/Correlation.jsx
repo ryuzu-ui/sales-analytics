@@ -270,7 +270,7 @@ function Correlation() {
 
         <div className="correlation-method">
           <span>METHOD</span>
-          <strong>PEARSON r</strong>
+          <strong>PEARSON&nbsp;r</strong>
         </div>
       </section>
 
