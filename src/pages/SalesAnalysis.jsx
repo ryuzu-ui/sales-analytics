@@ -1,4 +1,6 @@
+
 import { useMemo, useState } from "react";
+
 import {
   TrendingUp,
   ShoppingCart,
@@ -22,11 +24,50 @@ import {
 
 import { useSalesData } from "../context/SalesDataContext";
 
-function formatCurrency(value, maximumFractionDigits = 0) {
-  return `£${Number(value || 0).toLocaleString(undefined, {
+/* ============================================================
+   FORMATTERS
+   ============================================================ */
+
+function formatCurrency(
+  value,
+  maximumFractionDigits = 0
+) {
+  const number = Number(value || 0);
+
+  return `£${number.toLocaleString("en-GB", {
+    minimumFractionDigits:
+      maximumFractionDigits > 0 ? 0 : 0,
     maximumFractionDigits,
   })}`;
 }
+
+function formatExactCurrency(value) {
+  const number = Number(value);
+
+  if (!Number.isFinite(number)) {
+    return "£0.00";
+  }
+
+  /*
+    Keep normal currency values at 2 decimals.
+    If the value is extremely small, show enough
+    precision so it does not misleadingly appear as £0.00.
+  */
+
+  if (number > 0 && number < 0.01) {
+    return `£${number.toLocaleString("en-GB", {
+      minimumFractionDigits: 4,
+      maximumFractionDigits: 6,
+    })}`;
+  }
+
+  return `£${number.toLocaleString("en-GB", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`;
+}
+
+
 
 function formatCompactCurrency(value) {
   const number = Number(value || 0);
@@ -42,233 +83,404 @@ function formatCompactCurrency(value) {
   return formatCurrency(number);
 }
 
-function calculateMedian(values) {
-  if (!values.length) return 0;
+/* ============================================================
+   STATISTICS
+   ============================================================ */
 
-  const sorted = [...values].sort((a, b) => a - b);
-  const middle = Math.floor(sorted.length / 2);
+function calculateMedian(values) {
+  if (!values.length) {
+    return 0;
+  }
+
+  const sorted = [...values].sort(
+    (a, b) => a - b
+  );
+
+  const middle = Math.floor(
+    sorted.length / 2
+  );
 
   if (sorted.length % 2 === 0) {
-    return (sorted[middle - 1] + sorted[middle]) / 2;
+    return (
+      (sorted[middle - 1] +
+        sorted[middle]) /
+      2
+    );
   }
 
   return sorted[middle];
 }
 
 function calculateMode(values) {
-  if (!values.length) return 0;
+  if (!values.length) {
+    return 0;
+  }
 
-  const frequency = {};
+  const frequency = new Map();
 
   values.forEach((value) => {
-    const key = String(value);
+    const rounded = Number(
+      Number(value).toFixed(2)
+    );
 
-    frequency[key] = (frequency[key] || 0) + 1;
+    frequency.set(
+      rounded,
+      (frequency.get(rounded) || 0) + 1
+    );
   });
 
   let mode = values[0];
   let highestFrequency = 0;
 
-  Object.entries(frequency).forEach(([key, count]) => {
+  frequency.forEach((count, value) => {
     if (count > highestFrequency) {
       highestFrequency = count;
-      mode = Number(key);
+      mode = value;
     }
   });
 
-  return mode;
+  return Number(mode);
 }
 
+/* ============================================================
+   VALID SALES LINE
+   ============================================================ */
+
+function isValidSalesLine(row) {
+  const quantity = Number(row?.quantity);
+  const unitPrice = Number(row?.unitPrice);
+  const revenue = Number(row?.revenue);
+
+  return (
+    Number.isFinite(quantity) &&
+    quantity > 0 &&
+    Number.isFinite(unitPrice) &&
+    unitPrice > 0 &&
+    Number.isFinite(revenue) &&
+    revenue > 0 &&
+    String(row?.invoiceNo || "").trim() !== "" &&
+    String(row?.product || "").trim() !== ""
+  );
+}
+
+/* ============================================================
+   SALES ANALYSIS
+   ============================================================ */
+
 function SalesAnalysis() {
-  const [period, setPeriod] = useState("monthly");
+  const [period, setPeriod] =
+    useState("monthly");
 
   const {
     salesRecords,
     monthlySales,
     topProducts,
-    summary,
     isImported,
     isCleaned,
   } = useSalesData();
 
+  /* ==========================================================
+     DESCRIPTIVE ANALYSIS
+     ========================================================== */
+
   const analysis = useMemo(() => {
-    if (!salesRecords.length) {
+    /*
+      Always apply validation here as a defensive layer.
+
+      This is important because Sales Analysis should never
+      display invalid sales lines even if the page receives
+      unexpected/raw records from the shared context.
+    */
+
+    const validSalesLines =
+      salesRecords.filter(isValidSalesLine);
+
+    if (!validSalesLines.length) {
       return {
+        validSalesLines: [],
+
         totalRevenue: 0,
         totalUnits: 0,
-        totalTransactions: 0,
-        averageTransaction: 0,
+        totalSalesLines: 0,
+
+        averageSalesLine: 0,
         averageUnitPrice: 0,
-        medianTransaction: 0,
+
+        medianSalesLine: 0,
         modeUnitPrice: 0,
+
         countryPerformance: [],
+
         highestCountry: null,
         lowestCountry: null,
-        highestTransaction: null,
-        lowestTransaction: null,
+
+        highestSalesLine: null,
+        lowestSalesLine: null,
       };
     }
 
-    const revenues = salesRecords
-      .map((row) => Number(row.revenue || 0))
-      .filter(Number.isFinite);
+    const revenues =
+      validSalesLines
+        .map((row) =>
+          Number(row.revenue)
+        )
+        .filter(Number.isFinite);
 
-    const quantities = salesRecords
-      .map((row) => Number(row.quantity || 0))
-      .filter(Number.isFinite);
+    const quantities =
+      validSalesLines
+        .map((row) =>
+          Number(row.quantity)
+        )
+        .filter(Number.isFinite);
 
-    const unitPrices = salesRecords
-      .map((row) => Number(row.unitPrice || 0))
-      .filter(Number.isFinite);
+    const unitPrices =
+      validSalesLines
+        .map((row) =>
+          Number(row.unitPrice)
+        )
+        .filter(Number.isFinite);
 
-    const totalRevenue = revenues.reduce(
-      (sum, value) => sum + value,
-      0
-    );
+    const totalRevenue =
+      revenues.reduce(
+        (sum, value) =>
+          sum + value,
+        0
+      );
 
-    const totalUnits = quantities.reduce(
-      (sum, value) => sum + value,
-      0
-    );
+    const totalUnits =
+      quantities.reduce(
+        (sum, value) =>
+          sum + value,
+        0
+      );
 
-    const totalTransactions = salesRecords.length;
+    const totalSalesLines =
+      validSalesLines.length;
 
-    const averageTransaction =
-      totalTransactions > 0
-        ? totalRevenue / totalTransactions
+    const averageSalesLine =
+      totalSalesLines > 0
+        ? totalRevenue /
+          totalSalesLines
         : 0;
 
     const averageUnitPrice =
       unitPrices.length > 0
-        ? unitPrices.reduce((sum, value) => sum + value, 0) /
-          unitPrices.length
+        ? unitPrices.reduce(
+            (sum, value) =>
+              sum + value,
+            0
+          ) / unitPrices.length
         : 0;
 
-    const medianTransaction = calculateMedian(revenues);
+    const medianSalesLine =
+      calculateMedian(revenues);
 
-    const modeUnitPrice = calculateMode(unitPrices);
+    const modeUnitPrice =
+      calculateMode(unitPrices);
 
-    /*
-     * UCI Online Retail does not have a native category field.
-     * Country is therefore used for geographic performance analysis.
-     */
+    /* ========================================================
+       COUNTRY PERFORMANCE
+       ======================================================== */
+
     const countryMap = {};
 
-    salesRecords.forEach((row) => {
-      const country = row.region || row.country || "Unknown";
+    validSalesLines.forEach(
+      (row) => {
+        const country =
+          String(
+            row.region ||
+              row.country ||
+              "Unknown"
+          ).trim() ||
+          "Unknown";
 
-      if (!countryMap[country]) {
-        countryMap[country] = {
-          country,
-          revenue: 0,
-          units: 0,
-          transactions: 0,
-        };
+        if (!countryMap[country]) {
+          countryMap[country] = {
+            country,
+            revenue: 0,
+            units: 0,
+            salesLines: 0,
+          };
+        }
+
+        countryMap[country].revenue +=
+          Number(row.revenue) || 0;
+
+        countryMap[country].units +=
+          Number(row.quantity) || 0;
+
+        countryMap[country]
+          .salesLines += 1;
       }
+    );
 
-      countryMap[country].revenue += Number(row.revenue || 0);
-      countryMap[country].units += Number(row.quantity || 0);
-      countryMap[country].transactions += 1;
-    });
+    const countryPerformance =
+      Object.values(countryMap)
+        .sort(
+          (a, b) =>
+            b.revenue - a.revenue
+        )
+        .slice(0, 10);
 
-    const countryPerformance = Object.values(countryMap)
-      .sort((a, b) => b.revenue - a.revenue)
-      .slice(0, 10);
-
-    const highestCountry = countryPerformance[0] || null;
+    const highestCountry =
+      countryPerformance[0] ||
+      null;
 
     const lowestCountry =
       countryPerformance.length > 0
-        ? countryPerformance[countryPerformance.length - 1]
+        ? countryPerformance[
+            countryPerformance.length - 1
+          ]
         : null;
 
-    const highestTransaction = salesRecords.reduce(
-      (highest, row) => {
-        if (
-          !highest ||
-          Number(row.revenue || 0) >
-            Number(highest.revenue || 0)
-        ) {
-          return row;
-        }
+    /* ========================================================
+       HIGHEST SALES LINE
+       ======================================================== */
 
-        return highest;
-      },
-      null
-    );
+    const highestSalesLine =
+      validSalesLines.reduce(
+        (highest, row) => {
+          if (!highest) {
+            return row;
+          }
 
-    const lowestTransaction = salesRecords.reduce(
-      (lowest, row) => {
-        if (
-          !lowest ||
-          Number(row.revenue || 0) <
-            Number(lowest.revenue || 0)
-        ) {
-          return row;
-        }
+          return Number(row.revenue) >
+            Number(highest.revenue)
+            ? row
+            : highest;
+        },
+        null
+      );
 
-        return lowest;
-      },
-      null
-    );
+    /* ========================================================
+       LOWEST SALES LINE
+       ======================================================== */
+
+    const lowestSalesLine =
+      validSalesLines.reduce(
+        (lowest, row) => {
+          if (!lowest) {
+            return row;
+          }
+
+          return Number(row.revenue) <
+            Number(lowest.revenue)
+            ? row
+            : lowest;
+        },
+        null
+      );
 
     return {
+      validSalesLines,
+
       totalRevenue,
       totalUnits,
-      totalTransactions,
-      averageTransaction,
+      totalSalesLines,
+
+      averageSalesLine,
       averageUnitPrice,
-      medianTransaction,
+
+      medianSalesLine,
       modeUnitPrice,
+
       countryPerformance,
+
       highestCountry,
       lowestCountry,
-      highestTransaction,
-      lowestTransaction,
+
+      highestSalesLine,
+      lowestSalesLine,
     };
   }, [salesRecords]);
 
+  /* ==========================================================
+     MONTHLY GROWTH
+     ========================================================== */
+
   const growth = useMemo(() => {
-    if (!monthlySales || monthlySales.length < 2) {
+    if (
+      !monthlySales ||
+      monthlySales.length < 2
+    ) {
       return 0;
     }
 
     const previous =
       Number(
-        monthlySales[monthlySales.length - 2]?.revenue
+        monthlySales[
+          monthlySales.length - 2
+        ]?.revenue
       ) || 0;
 
     const current =
       Number(
-        monthlySales[monthlySales.length - 1]?.revenue
+        monthlySales[
+          monthlySales.length - 1
+        ]?.revenue
       ) || 0;
 
-    return previous !== 0
-      ? ((current - previous) / Math.abs(previous)) * 100
-      : 0;
+    if (previous === 0) {
+      return 0;
+    }
+
+    return (
+      ((current - previous) /
+        Math.abs(previous)) *
+      100
+    );
   }, [monthlySales]);
 
+  /* ==========================================================
+     CHART DATA
+     ========================================================== */
+
   const chartData = useMemo(() => {
+    if (!monthlySales.length) {
+      return [];
+    }
+
     if (period === "monthly") {
       return monthlySales;
     }
 
     if (period === "quarterly") {
       const quarters = [
-        { month: "Q1", revenue: 0 },
-        { month: "Q2", revenue: 0 },
-        { month: "Q3", revenue: 0 },
-        { month: "Q4", revenue: 0 },
+        {
+          month: "Q1",
+          revenue: 0,
+        },
+        {
+          month: "Q2",
+          revenue: 0,
+        },
+        {
+          month: "Q3",
+          revenue: 0,
+        },
+        {
+          month: "Q4",
+          revenue: 0,
+        },
       ];
 
-      monthlySales.forEach((item, index) => {
-        const quarter = Math.floor(index / 3);
+      monthlySales.forEach(
+        (item, index) => {
+          const quarter =
+            Math.floor(index / 3);
 
-        if (quarters[quarter]) {
-          quarters[quarter].revenue +=
-            Number(item.revenue || 0);
+          if (
+            quarters[quarter]
+          ) {
+            quarters[
+              quarter
+            ].revenue +=
+              Number(
+                item.revenue || 0
+              );
+          }
         }
-      });
+      );
 
       return quarters;
     }
@@ -276,40 +488,55 @@ function SalesAnalysis() {
     return monthlySales.slice(-6);
   }, [period, monthlySales]);
 
+  /* ==========================================================
+     RENDER
+     ========================================================== */
+
   return (
     <div className="sales-analysis-page">
 
-      {/* =========================
+      {/* ======================================================
           HEADER
-      ========================= */}
+      ====================================================== */}
 
       <section className="analysis-heading">
 
         <div>
 
           <div className="section-kicker">
-            <span className="kicker-block">03</span>
+            <span className="kicker-block">
+              03
+            </span>
+
             DESCRIPTIVE ANALYSIS
           </div>
 
-          <h1>SALES ANALYSIS</h1>
+          <h1>
+            SALES ANALYSIS
+          </h1>
 
           <p>
-            Understand overall sales performance using
-            descriptive statistics, revenue trends,
-            transaction volume, and geographic performance.
+            Understand overall sales
+            performance using descriptive
+            statistics, revenue trends,
+            sales-line volume, and
+            geographic performance.
           </p>
 
         </div>
 
         <div className="analysis-period">
 
-          <span>VIEW PERIOD</span>
+          <span>
+            VIEW PERIOD
+          </span>
 
           <select
             value={period}
             onChange={(event) =>
-              setPeriod(event.target.value)
+              setPeriod(
+                event.target.value
+              )
             }
           >
             <option value="monthly">
@@ -329,9 +556,9 @@ function SalesAnalysis() {
 
       </section>
 
-      {/* =========================
-          DATA STATUS
-      ========================= */}
+      {/* ======================================================
+          DATASET STATUS
+      ====================================================== */}
 
       {isImported && (
         <section className="analysis-data-status">
@@ -347,20 +574,25 @@ function SalesAnalysis() {
           </strong>
 
           <span>
-            {salesRecords.length.toLocaleString()} records
+            {analysis.validSalesLines.length.toLocaleString()}{" "}
+            valid sales lines
           </span>
 
         </section>
       )}
 
-      {/* =========================
+      {/* ======================================================
           KPI CARDS
-      ========================= */}
+      ====================================================== */}
 
       <section className="analysis-kpi-grid">
 
         <AnalysisKpi
-          icon={<PhilippinePeso size={23} />}
+          icon={
+            <PhilippinePeso
+              size={23}
+            />
+          }
           label="TOTAL REVENUE"
           value={
             isImported
@@ -371,14 +603,18 @@ function SalesAnalysis() {
           }
           description={
             isImported
-              ? "Revenue across analyzed transactions"
+              ? "Revenue across analyzed sales lines"
               : "Import a dataset first"
           }
           accent="purple"
         />
 
         <AnalysisKpi
-          icon={<ShoppingCart size={23} />}
+          icon={
+            <ShoppingCart
+              size={23}
+            />
+          }
           label="UNITS SOLD"
           value={
             isImported
@@ -394,31 +630,41 @@ function SalesAnalysis() {
         />
 
         <AnalysisKpi
-          icon={<Calculator size={23} />}
-          label="AVG. TRANSACTION"
+          icon={
+            <Calculator
+              size={23}
+            />
+          }
+          label="AVG. SALES LINE"
           value={
             isImported
-              ? formatCurrency(
-                  Math.round(
-                    analysis.averageTransaction
-                  )
+              ? formatExactCurrency(
+                  analysis.averageSalesLine
                 )
               : "—"
           }
           description={
             isImported
-              ? "Average revenue per transaction row"
+              ? "Average revenue per sales line"
               : "Import a dataset first"
           }
           accent="pink"
         />
 
         <AnalysisKpi
-          icon={<TrendingUp size={23} />}
+          icon={
+            <TrendingUp
+              size={23}
+            />
+          }
           label="RECENT GROWTH"
           value={
             isImported
-              ? `${growth >= 0 ? "+" : ""}${growth.toFixed(
+              ? `${
+                  growth >= 0
+                    ? "+"
+                    : ""
+                }${growth.toFixed(
                   1
                 )}%`
               : "—"
@@ -429,20 +675,25 @@ function SalesAnalysis() {
               : "Import a dataset first"
           }
           accent="white"
-          positive={isImported ? growth >= 0 : undefined}
+          positive={
+            isImported
+              ? growth >= 0
+              : undefined
+          }
         />
 
       </section>
 
-      {/* =========================
+      {/* ======================================================
           REVENUE TREND
-      ========================= */}
+      ====================================================== */}
 
       <section className="analysis-main-chart">
 
         <div className="analysis-card-header">
 
           <div>
+
             <span className="studio-label">
               TIME-SERIES OVERVIEW
             </span>
@@ -450,6 +701,7 @@ function SalesAnalysis() {
             <h2>
               REVENUE TREND
             </h2>
+
           </div>
 
           <div className="chart-highlight">
@@ -459,10 +711,12 @@ function SalesAnalysis() {
             </span>
 
             <strong>
-              {isImported && chartData.length
+              {isImported &&
+              chartData.length
                 ? formatCurrency(
                     chartData[
-                      chartData.length - 1
+                      chartData.length -
+                        1
                     ].revenue
                   )
                 : "—"}
@@ -498,7 +752,12 @@ function SalesAnalysis() {
                 />
 
                 <XAxis
-                  dataKey="label"
+                  dataKey={
+                    period ===
+                    "quarterly"
+                      ? "month"
+                      : "label"
+                  }
                   tick={{
                     fill: "#111",
                     fontSize: 11,
@@ -520,23 +779,32 @@ function SalesAnalysis() {
                     strokeWidth: 2,
                   }}
                   tickLine={false}
-                  tickFormatter={(value) =>
+                  tickFormatter={(
+                    value
+                  ) =>
                     `£${Math.round(
-                      value / 1000
+                      Number(value) /
+                        1000
                     )}k`
                   }
                 />
 
                 <Tooltip
-                  formatter={(value) => [
-                    formatCurrency(value),
+                  formatter={(
+                    value
+                  ) => [
+                    formatExactCurrency(
+                      value
+                    ),
                     "Revenue",
                   ]}
                   contentStyle={{
-                    border: "3px solid #111",
+                    border:
+                      "3px solid #111",
                     boxShadow:
                       "5px 5px 0 #111",
-                    fontFamily: "Public Sans",
+                    fontFamily:
+                      "Public Sans",
                     fontWeight: 700,
                   }}
                 />
@@ -577,13 +845,11 @@ function SalesAnalysis() {
 
       </section>
 
-      {/* =========================
-          LOWER ANALYSIS
-      ========================= */}
+      {/* ======================================================
+          COUNTRY + DESCRIPTIVE STATISTICS
+      ====================================================== */}
 
       <section className="analysis-two-column">
-
-        {/* COUNTRY PERFORMANCE */}
 
         <div className="category-analysis-card">
 
@@ -605,7 +871,8 @@ function SalesAnalysis() {
 
           <div className="category-chart">
 
-            {analysis.countryPerformance.length > 0 ? (
+            {analysis.countryPerformance.length >
+            0 ? (
 
               <ResponsiveContainer
                 width="100%"
@@ -642,9 +909,12 @@ function SalesAnalysis() {
                       strokeWidth: 2,
                     }}
                     tickLine={false}
-                    tickFormatter={(value) =>
+                    tickFormatter={(
+                      value
+                    ) =>
                       `£${Math.round(
-                        value / 1000
+                        Number(value) /
+                          1000
                       )}k`
                     }
                   />
@@ -666,15 +936,21 @@ function SalesAnalysis() {
                   />
 
                   <Tooltip
-                    formatter={(value) => [
-                      formatCurrency(value),
+                    formatter={(
+                      value
+                    ) => [
+                      formatExactCurrency(
+                        value
+                      ),
                       "Revenue",
                     ]}
                     contentStyle={{
-                      border: "3px solid #111",
+                      border:
+                        "3px solid #111",
                       boxShadow:
                         "5px 5px 0 #111",
-                      fontFamily: "Public Sans",
+                      fontFamily:
+                        "Public Sans",
                       fontWeight: 700,
                     }}
                   />
@@ -704,8 +980,6 @@ function SalesAnalysis() {
 
         </div>
 
-        {/* DESCRIPTIVE STATISTICS */}
-
         <div className="descriptive-card">
 
           <div className="analysis-card-header pink-header">
@@ -727,10 +1001,10 @@ function SalesAnalysis() {
           <div className="descriptive-list">
 
             <StatisticRow
-              label="Total Transactions"
+              label="Total Sales Lines"
               value={
                 isImported
-                  ? analysis.totalTransactions.toLocaleString()
+                  ? analysis.totalSalesLines.toLocaleString()
                   : "—"
               }
             />
@@ -756,26 +1030,22 @@ function SalesAnalysis() {
             />
 
             <StatisticRow
-              label="Mean Transaction Value"
+              label="Mean Sales Line Value"
               value={
                 isImported
-                  ? formatCurrency(
-                      Math.round(
-                        analysis.averageTransaction
-                      )
+                  ? formatExactCurrency(
+                      analysis.averageSalesLine
                     )
                   : "—"
               }
             />
 
             <StatisticRow
-              label="Median Transaction Value"
+              label="Median Sales Line Value"
               value={
                 isImported
-                  ? formatCurrency(
-                      Math.round(
-                        analysis.medianTransaction
-                      )
+                  ? formatExactCurrency(
+                      analysis.medianSalesLine
                     )
                   : "—"
               }
@@ -785,10 +1055,8 @@ function SalesAnalysis() {
               label="Mean Unit Price"
               value={
                 isImported
-                  ? formatCurrency(
-                      Math.round(
-                        analysis.averageUnitPrice
-                      )
+                  ? formatExactCurrency(
+                      analysis.averageUnitPrice
                     )
                   : "—"
               }
@@ -798,7 +1066,7 @@ function SalesAnalysis() {
               label="Mode Unit Price"
               value={
                 isImported
-                  ? formatCurrency(
+                  ? formatExactCurrency(
                       analysis.modeUnitPrice
                     )
                   : "—"
@@ -811,9 +1079,9 @@ function SalesAnalysis() {
 
       </section>
 
-      {/* =========================
+      {/* ======================================================
           TOP PRODUCTS
-      ========================= */}
+      ====================================================== */}
 
       <section className="analysis-products-card">
 
@@ -841,67 +1109,71 @@ function SalesAnalysis() {
 
           {topProducts.length > 0 ? (
 
-            topProducts.map((product, index) => (
+            topProducts.map(
+              (product, index) => (
 
-              <div
-                className="analysis-product-row"
-                key={product.name}
-              >
+                <div
+                  className="analysis-product-row"
+                  key={product.name}
+                >
 
-                <div className="product-rank">
-                  {String(index + 1).padStart(
-                    2,
-                    "0"
-                  )}
+                  <div className="product-rank">
+                    {String(
+                      index + 1
+                    ).padStart(2, "0")}
+                  </div>
+
+                  <div className="product-information">
+
+                    <strong>
+                      {product.name}
+                    </strong>
+
+                    <span>
+                      Product
+                    </span>
+
+                  </div>
+
+                  <div className="product-units">
+
+                    <span>
+                      UNITS
+                    </span>
+
+                    <strong>
+                      {Number(
+                        product.units ||
+                          0
+                      ).toLocaleString()}
+                    </strong>
+
+                  </div>
+
+                  <div className="product-sales">
+
+                    <span>
+                      SALES
+                    </span>
+
+                    <strong>
+                      {formatExactCurrency(
+                        product.sales
+                      )}
+                    </strong>
+
+                  </div>
+
+                  <div className="product-arrow">
+                    <ArrowUpRight
+                      size={20}
+                    />
+                  </div>
+
                 </div>
 
-                <div className="product-information">
-
-                  <strong>
-                    {product.name}
-                  </strong>
-
-                  <span>
-                    Product
-                  </span>
-
-                </div>
-
-                <div className="product-units">
-
-                  <span>
-                    UNITS
-                  </span>
-
-                  <strong>
-                    {Number(
-                      product.units || 0
-                    ).toLocaleString()}
-                  </strong>
-
-                </div>
-
-                <div className="product-sales">
-
-                  <span>
-                    SALES
-                  </span>
-
-                  <strong>
-                    {formatCurrency(
-                      product.sales
-                    )}
-                  </strong>
-
-                </div>
-
-                <div className="product-arrow">
-                  <ArrowUpRight size={20} />
-                </div>
-
-              </div>
-
-            ))
+              )
+            )
 
           ) : (
 
@@ -916,11 +1188,13 @@ function SalesAnalysis() {
 
       </section>
 
-      {/* =========================
-          EXTREME TRANSACTIONS
-      ========================= */}
+      {/* ======================================================
+          SALES LINE ANALYSIS
+      ====================================================== */}
 
       <section className="analysis-two-column">
+
+        {/* HIGHEST */}
 
         <div className="descriptive-card">
 
@@ -929,51 +1203,39 @@ function SalesAnalysis() {
             <div>
 
               <span className="studio-label">
-                TRANSACTION ANALYSIS
+                SALES-LINE ANALYSIS
               </span>
 
               <h2>
-                HIGHEST TRANSACTION
+                HIGHEST SALES LINE
               </h2>
 
             </div>
 
           </div>
 
-          {analysis.highestTransaction ? (
+          {analysis.highestSalesLine ? (
 
-            <div className="transaction-highlight">
-
-              <strong>
-                {formatCurrency(
-                  analysis.highestTransaction.revenue
-                )}
-              </strong>
-
-              <span>
-                {analysis.highestTransaction.product ||
-                  "Unknown product"}
-              </span>
-
-              <small>
-                Invoice:{" "}
-                {analysis.highestTransaction.id ||
-                  "N/A"}
-              </small>
-
-            </div>
+            <SalesLineHighlight
+              row={
+                analysis.highestSalesLine
+              }
+              type="highest"
+            />
 
           ) : (
 
             <EmptyAnalysis
-              title="NO TRANSACTION DATA"
-              description="Import a dataset first."
+              title="NO SALES-LINE DATA"
+              description="Import and clean a sales dataset first."
             />
 
           )}
 
         </div>
 
+        {/* LOWEST */}
+
         <div className="descriptive-card">
 
           <div className="analysis-card-header">
@@ -981,45 +1243,31 @@ function SalesAnalysis() {
             <div>
 
               <span className="studio-label">
-                TRANSACTION ANALYSIS
+                SALES-LINE ANALYSIS
               </span>
 
               <h2>
-                LOWEST TRANSACTION
+                LOWEST SALES LINE
               </h2>
 
             </div>
 
           </div>
 
-          {analysis.lowestTransaction ? (
+          {analysis.lowestSalesLine ? (
 
-            <div className="transaction-highlight">
-
-              <strong>
-                {formatCurrency(
-                  analysis.lowestTransaction.revenue
-                )}
-              </strong>
-
-              <span>
-                {analysis.lowestTransaction.product ||
-                  "Unknown product"}
-              </span>
-
-              <small>
-                Invoice:{" "}
-                {analysis.lowestTransaction.id ||
-                  "N/A"}
-              </small>
-
-            </div>
+            <SalesLineHighlight
+              row={
+                analysis.lowestSalesLine
+              }
+              type="lowest"
+            />
 
           ) : (
 
             <EmptyAnalysis
-              title="NO TRANSACTION DATA"
-              description="Import a dataset first."
+              title="NO SALES-LINE DATA"
+              description="Import and clean a sales dataset first."
             />
 
           )}
@@ -1028,9 +1276,9 @@ function SalesAnalysis() {
 
       </section>
 
-      {/* =========================
+      {/* ======================================================
           INTERPRETATION
-      ========================= */}
+      ====================================================== */}
 
       <section className="analysis-interpretation">
 
@@ -1051,8 +1299,9 @@ function SalesAnalysis() {
           {!isImported ? (
 
             <p>
-              Import a sales dataset to generate
-              descriptive statistics and performance
+              Import a sales dataset to
+              generate descriptive
+              statistics and performance
               findings.
             </p>
 
@@ -1061,30 +1310,39 @@ function SalesAnalysis() {
             <p>
 
               The cleaned dataset contains{" "}
+
               <strong>
-                {analysis.totalTransactions.toLocaleString()}
+                {analysis.totalSalesLines.toLocaleString()}
               </strong>{" "}
-              transaction records and{" "}
+
+              sales-line records and{" "}
+
               <strong>
                 {analysis.totalUnits.toLocaleString()}
               </strong>{" "}
+
               total units sold, generating{" "}
+
               <strong>
                 {formatCurrency(
                   analysis.totalRevenue
                 )}
               </strong>{" "}
+
               in recorded revenue.
 
               {analysis.highestCountry && (
                 <>
                   {" "}
-                  {analysis.highestCountry.country} has
-                  the highest recorded revenue among the
-                  countries in the dataset, with{" "}
+                  {analysis.highestCountry.country}{" "}
+                  has the highest recorded
+                  revenue among the countries
+                  in the dataset, with{" "}
+
                   <strong>
                     {formatCurrency(
-                      analysis.highestCountry.revenue
+                      analysis.highestCountry
+                        .revenue
                     )}
                   </strong>
                   .
@@ -1092,10 +1350,12 @@ function SalesAnalysis() {
               )}
 
               {" "}
-              The results provide the descriptive
-              baseline for the succeeding pattern,
-              correlation, statistical, and forecasting
-              analysis.
+
+              The results provide the
+              descriptive baseline for the
+              succeeding pattern,
+              correlation, statistical,
+              and forecasting analysis.
 
             </p>
 
@@ -1108,6 +1368,10 @@ function SalesAnalysis() {
     </div>
   );
 }
+
+/* ============================================================
+   KPI COMPONENT
+   ============================================================ */
 
 function AnalysisKpi({
   icon,
@@ -1139,9 +1403,13 @@ function AnalysisKpi({
         {positive !== undefined && (
           <>
             {positive ? (
-              <ArrowUpRight size={13} />
+              <ArrowUpRight
+                size={13}
+              />
             ) : (
-              <ArrowDownRight size={13} />
+              <ArrowDownRight
+                size={13}
+              />
             )}
           </>
         )}
@@ -1153,6 +1421,10 @@ function AnalysisKpi({
     </div>
   );
 }
+
+/* ============================================================
+   STATISTIC ROW
+   ============================================================ */
 
 function StatisticRow({
   label,
@@ -1172,6 +1444,125 @@ function StatisticRow({
     </div>
   );
 }
+
+/* ============================================================
+   SALES LINE HIGHLIGHT
+   ============================================================ */
+
+function SalesLineHighlight({
+  row,
+  type,
+}) {
+  const quantity =
+    Number(row.quantity) || 0;
+
+  const unitPrice =
+    Number(row.unitPrice) || 0;
+
+  const revenue =
+    Number(row.revenue) || 0;
+
+  const invoice =
+    String(
+      row.invoiceNo || ""
+    ).trim() || "N/A";
+
+  const product =
+    String(
+      row.product || ""
+    ).trim() ||
+    "Unknown product";
+
+  return (
+    <div className="transaction-highlight">
+
+      <strong>
+        {formatExactCurrency(
+          revenue
+        )}
+      </strong>
+
+      <span>
+        {product}
+      </span>
+
+      <small>
+        Invoice: {invoice}
+      </small>
+
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns:
+            "repeat(2, minmax(0, 1fr))",
+          gap: "10px",
+          marginTop: "16px",
+        }}
+      >
+
+        <div>
+
+          <span
+            style={{
+              display: "block",
+              fontSize: "10px",
+              fontWeight: 800,
+              letterSpacing:
+                "0.08em",
+              marginBottom: "4px",
+            }}
+          >
+            QUANTITY
+          </span>
+
+          <strong
+            style={{
+              display: "block",
+              fontSize: "18px",
+            }}
+          >
+            {quantity.toLocaleString()}
+          </strong>
+
+        </div>
+
+        <div>
+
+          <span
+            style={{
+              display: "block",
+              fontSize: "10px",
+              fontWeight: 800,
+              letterSpacing:
+                "0.08em",
+              marginBottom: "4px",
+            }}
+          >
+            UNIT PRICE
+          </span>
+
+          <strong
+            style={{
+              display: "block",
+              fontSize: "18px",
+            }}
+          >
+            {formatExactCurrency(
+              unitPrice
+            )}
+          </strong>
+
+        </div>
+
+      </div>
+
+    </div>
+  );
+}
+
+/* ============================================================
+   EMPTY STATE
+   ============================================================ */
 
 function EmptyAnalysis({
   title,
@@ -1194,6 +1585,10 @@ function EmptyAnalysis({
   );
 }
 
+/* ============================================================
+   DATABASE ICON
+   ============================================================ */
+
 function DatabaseIcon() {
   return (
     <svg
@@ -1206,6 +1601,7 @@ function DatabaseIcon() {
       strokeLinecap="round"
       strokeLinejoin="round"
     >
+
       <ellipse
         cx="12"
         cy="5"
@@ -1226,3 +1622,4 @@ function DatabaseIcon() {
 }
 
 export default SalesAnalysis;
+

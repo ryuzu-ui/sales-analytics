@@ -2,10 +2,8 @@ import { useMemo, useState } from "react";
 import {
   GitCompareArrows,
   Info,
-  ArrowUpRight,
-  ArrowDownRight,
-  Minus,
 } from "lucide-react";
+
 import {
   ResponsiveContainer,
   ScatterChart,
@@ -14,14 +12,28 @@ import {
   YAxis,
   CartesianGrid,
   Tooltip,
-  ReferenceLine,
 } from "recharts";
 
-import { salesRecords } from "../data/salesData";
+import { useSalesData } from "../context/SalesDataContext";
+
+const SCATTER_SAMPLE_SIZE = 1500;
 
 function Correlation() {
-  const [selectedPair, setSelectedPair] = useState("quantity-revenue");
+  const [selectedPair, setSelectedPair] =
+    useState("quantity-revenue");
 
+  const {
+    salesRecords,
+    isImported,
+  } = useSalesData();
+
+  /*
+   * IMPORTANT:
+   * Pearson calculations use the COMPLETE cleaned dataset.
+   *
+   * Only the scatter plot is sampled because rendering
+   * hundreds of thousands of SVG points will freeze the browser.
+   */
   const correlationData = useMemo(() => {
     const pairs = [
       {
@@ -48,35 +60,188 @@ function Correlation() {
     ];
 
     return pairs.map((pair) => {
-      const valuesA = salesRecords.map((row) => Number(row[pair.keyA] || 0));
-      const valuesB = salesRecords.map((row) => Number(row[pair.keyB] || 0));
+      const validRows = [];
 
-      const coefficient = pearsonCorrelation(valuesA, valuesB);
+      for (
+        let i = 0;
+        i < salesRecords.length;
+        i += 1
+      ) {
+        const row = salesRecords[i];
+
+        const x = Number(row[pair.keyA]);
+        const y = Number(row[pair.keyB]);
+
+        if (
+          Number.isFinite(x) &&
+          Number.isFinite(y)
+        ) {
+          validRows.push({
+            x,
+            y,
+            label: row.product,
+            id:
+              row.invoiceNo ||
+              row.id ||
+              i,
+          });
+        }
+      }
+
+      /*
+       * FULL DATASET CORRELATION
+       */
+      const valuesA = new Array(
+        validRows.length
+      );
+
+      const valuesB = new Array(
+        validRows.length
+      );
+
+      for (
+        let i = 0;
+        i < validRows.length;
+        i += 1
+      ) {
+        valuesA[i] = validRows[i].x;
+        valuesB[i] = validRows[i].y;
+      }
+
+      const coefficient =
+        pearsonCorrelation(
+          valuesA,
+          valuesB
+        );
+
+      /*
+       * SCATTER PLOT SAMPLE
+       *
+       * Uses evenly distributed records instead
+       * of rendering hundreds of thousands of points.
+       */
+      const scatterData =
+        createScatterSample(
+          validRows,
+          SCATTER_SAMPLE_SIZE
+        );
 
       return {
         ...pair,
         coefficient,
-        strength: getStrength(coefficient),
-        direction: getDirection(coefficient),
-        data: salesRecords.map((row) => ({
-          x: Number(row[pair.keyA] || 0),
-          y: Number(row[pair.keyB] || 0),
-          label: row.product,
-          id: row.id,
-        })),
+        strength:
+          getStrength(coefficient),
+        direction:
+          getDirection(coefficient),
+        data: scatterData,
+        observationCount:
+          validRows.length,
       };
     });
-  }, []);
+  }, [salesRecords]);
 
-  const selected = correlationData.find(
-    (item) => item.id === selectedPair
-  ) || correlationData[0];
+  const selected =
+    correlationData.find(
+      (item) =>
+        item.id === selectedPair
+    ) ||
+    correlationData[0] || {
+      variableA: "Quantity",
+      variableB: "Revenue",
+      coefficient: 0,
+      strength: "Very Weak",
+      direction: "NEUTRAL",
+      data: [],
+      observationCount: 0,
+    };
 
-  const interpretation = getInterpretation(
-    selected.coefficient,
-    selected.variableA,
-    selected.variableB
-  );
+  const interpretation =
+    getInterpretation(
+      selected.coefficient,
+      selected.variableA,
+      selected.variableB
+    );
+
+  /*
+   * CORRELATION MATRIX
+   *
+   * All values are calculated from the complete
+   * cleaned dataset.
+   */
+  const matrix = useMemo(() => {
+    const quantityRevenue =
+      calculateDirectCorrelation(
+        salesRecords,
+        "quantity",
+        "revenue"
+      );
+
+    const quantityPrice =
+      calculateDirectCorrelation(
+        salesRecords,
+        "quantity",
+        "unitPrice"
+      );
+
+    const priceRevenue =
+      calculateDirectCorrelation(
+        salesRecords,
+        "unitPrice",
+        "revenue"
+      );
+
+    return {
+      quantity: [
+        1,
+        quantityPrice,
+        quantityRevenue,
+      ],
+
+      unitPrice: [
+        quantityPrice,
+        1,
+        priceRevenue,
+      ],
+
+      revenue: [
+        quantityRevenue,
+        priceRevenue,
+        1,
+      ],
+    };
+  }, [salesRecords]);
+
+  if (
+    !isImported ||
+    !salesRecords.length
+  ) {
+    return (
+      <div className="correlation-page">
+        <section className="correlation-heading">
+          <div>
+            <div className="section-kicker">
+              <span className="kicker-block">
+                05
+              </span>
+
+              CORRELATION ANALYSIS
+            </div>
+
+            <h1>
+              VARIABLE RELATIONSHIPS
+            </h1>
+
+            <p>
+              Import a sales dataset to
+              calculate Pearson correlations
+              between numerical sales
+              variables.
+            </p>
+          </div>
+        </section>
+      </div>
+    );
+  }
 
   return (
     <div className="correlation-page">
@@ -84,15 +249,22 @@ function Correlation() {
       <section className="correlation-heading">
         <div>
           <div className="section-kicker">
-            <span className="kicker-block">05</span>
+            <span className="kicker-block">
+              05
+            </span>
+
             CORRELATION ANALYSIS
           </div>
 
-          <h1>VARIABLE RELATIONSHIPS</h1>
+          <h1>
+            VARIABLE RELATIONSHIPS
+          </h1>
 
           <p>
-            Examine the relationship between numerical sales variables using
-            Pearson correlation and scatter plot analysis.
+            Examine the relationship between
+            numerical sales variables using
+            Pearson correlation and scatter
+            plot analysis.
           </p>
         </div>
 
@@ -105,19 +277,34 @@ function Correlation() {
       {/* PAIR SELECTOR */}
       <section className="correlation-selector">
         <div>
-          <span className="studio-label">VARIABLE PAIR</span>
-          <h2>CHOOSE VARIABLES TO COMPARE</h2>
+          <span className="studio-label">
+            VARIABLE PAIR
+          </span>
+
+          <h2>
+            CHOOSE VARIABLES TO COMPARE
+          </h2>
         </div>
 
         <div className="pair-buttons">
           {correlationData.map((pair) => (
             <button
               key={pair.id}
-              className={selectedPair === pair.id ? "active" : ""}
-              onClick={() => setSelectedPair(pair.id)}
+              className={
+                selectedPair === pair.id
+                  ? "active"
+                  : ""
+              }
+              onClick={() =>
+                setSelectedPair(pair.id)
+              }
             >
               {pair.variableA}
-              <GitCompareArrows size={14} />
+
+              <GitCompareArrows
+                size={14}
+              />
+
               {pair.variableB}
             </button>
           ))}
@@ -127,11 +314,17 @@ function Correlation() {
       {/* CORRELATION SCORE */}
       <section className="correlation-score-grid">
         <div className="correlation-score-card purple">
-          <span>PEARSON CORRELATION</span>
+          <span>
+            PEARSON CORRELATION
+          </span>
 
           <strong>
-            {selected.coefficient >= 0 ? "+" : ""}
-            {selected.coefficient.toFixed(3)}
+            {selected.coefficient >= 0
+              ? "+"
+              : ""}
+            {selected.coefficient.toFixed(
+              3
+            )}
           </strong>
 
           <small>
@@ -142,30 +335,39 @@ function Correlation() {
         <div className="correlation-score-card yellow">
           <span>RELATIONSHIP</span>
 
-          <strong>{selected.direction}</strong>
+          <strong>
+            {selected.direction}
+          </strong>
 
           <small>
-            Direction of the observed relationship
+            Direction of the observed
+            relationship
           </small>
         </div>
 
         <div className="correlation-score-card pink">
           <span>STRENGTH</span>
 
-          <strong>{selected.strength}</strong>
+          <strong>
+            {selected.strength}
+          </strong>
 
           <small>
-            Based on the absolute correlation value
+            Based on the absolute
+            correlation value
           </small>
         </div>
 
         <div className="correlation-score-card white">
           <span>OBSERVATIONS</span>
 
-          <strong>{selected.data.length}</strong>
+          <strong>
+            {selected.observationCount.toLocaleString()}
+          </strong>
 
           <small>
-            Records included in calculation
+            Complete valid records used
+            in calculation
           </small>
         </div>
       </section>
@@ -174,21 +376,30 @@ function Correlation() {
       <section className="correlation-chart-card">
         <div className="correlation-card-header">
           <div>
-            <span className="studio-label">SCATTER PLOT</span>
+            <span className="studio-label">
+              SCATTER PLOT
+            </span>
 
             <h2>
-              {selected.variableA.toUpperCase()} VS{" "}
+              {selected.variableA.toUpperCase()}{" "}
+              VS{" "}
               {selected.variableB.toUpperCase()}
             </h2>
           </div>
 
           <div className="correlation-badge">
-            r = {selected.coefficient.toFixed(3)}
+            r ={" "}
+            {selected.coefficient.toFixed(
+              3
+            )}
           </div>
         </div>
 
         <div className="scatter-container">
-          <ResponsiveContainer width="100%" height={430}>
+          <ResponsiveContainer
+            width="100%"
+            height={430}
+          >
             <ScatterChart
               margin={{
                 top: 20,
@@ -207,8 +418,14 @@ function Correlation() {
                 type="number"
                 dataKey="x"
                 name={selected.variableA}
-                tick={{ fill: "#111", fontSize: 10 }}
-                axisLine={{ stroke: "#111", strokeWidth: 2 }}
+                tick={{
+                  fill: "#111",
+                  fontSize: 10,
+                }}
+                axisLine={{
+                  stroke: "#111",
+                  strokeWidth: 2,
+                }}
                 tickLine={false}
               />
 
@@ -216,8 +433,14 @@ function Correlation() {
                 type="number"
                 dataKey="y"
                 name={selected.variableB}
-                tick={{ fill: "#111", fontSize: 10 }}
-                axisLine={{ stroke: "#111", strokeWidth: 2 }}
+                tick={{
+                  fill: "#111",
+                  fontSize: 10,
+                }}
+                axisLine={{
+                  stroke: "#111",
+                  strokeWidth: 2,
+                }}
                 tickLine={false}
               />
 
@@ -225,31 +448,43 @@ function Correlation() {
                 cursor={{
                   strokeDasharray: "4 4",
                 }}
-                formatter={(value, name) => [
-                  Number(value).toLocaleString(),
+                formatter={(
+                  value,
+                  name
+                ) => [
+                  Number(
+                    value
+                  ).toLocaleString(
+                    "en-GB",
+                    {
+                      maximumFractionDigits: 2,
+                    }
+                  ),
                   name === "x"
                     ? selected.variableA
                     : selected.variableB,
                 ]}
-                labelFormatter={(_, payload) => {
-                  const point = payload?.[0]?.payload;
+                labelFormatter={(
+                  _,
+                  payload
+                ) => {
+                  const point =
+                    payload?.[0]
+                      ?.payload;
+
                   return point
                     ? `${point.id} — ${point.label}`
                     : "";
                 }}
                 contentStyle={{
-                  border: "3px solid #111",
-                  boxShadow: "5px 5px 0 #111",
-                  fontFamily: "Public Sans",
+                  border:
+                    "3px solid #111",
+                  boxShadow:
+                    "5px 5px 0 #111",
+                  fontFamily:
+                    "Public Sans",
                   fontWeight: 700,
                 }}
-              />
-
-              <ReferenceLine
-                x={average(selected.data.map((item) => item.x))}
-                stroke="#111"
-                strokeDasharray="6 5"
-                opacity={0.35}
               />
 
               <Scatter
@@ -257,10 +492,28 @@ function Correlation() {
                 data={selected.data}
                 fill="#f08cb6"
                 stroke="#111"
-                strokeWidth={2}
+                strokeWidth={1}
               />
             </ScatterChart>
           </ResponsiveContainer>
+        </div>
+
+        <div
+          style={{
+            padding:
+              "10px 18px 16px",
+            fontSize: "11px",
+            fontWeight: 700,
+            letterSpacing:
+              "0.04em",
+            opacity: 0.65,
+          }}
+        >
+          SCATTER DISPLAY:
+          {selected.data.length.toLocaleString()}{" "}
+          sampled points · PEARSON r uses all{" "}
+          {selected.observationCount.toLocaleString()}{" "}
+          valid records
         </div>
       </section>
 
@@ -271,9 +524,14 @@ function Correlation() {
         </div>
 
         <div>
-          <span className="studio-label">STATISTICAL INTERPRETATION</span>
+          <span className="studio-label">
+            STATISTICAL INTERPRETATION
+          </span>
 
-          <h2>{selected.variableA} & {selected.variableB}</h2>
+          <h2>
+            {selected.variableA} &{" "}
+            {selected.variableB}
+          </h2>
 
           <p>{interpretation}</p>
         </div>
@@ -283,8 +541,13 @@ function Correlation() {
       <section className="correlation-matrix-card">
         <div className="correlation-card-header yellow-correlation-header">
           <div>
-            <span className="studio-label">CORRELATION MATRIX</span>
-            <h2>VARIABLE RELATIONSHIP SUMMARY</h2>
+            <span className="studio-label">
+              CORRELATION MATRIX
+            </span>
+
+            <h2>
+              VARIABLE RELATIONSHIP SUMMARY
+            </h2>
           </div>
         </div>
 
@@ -302,17 +565,17 @@ function Correlation() {
             <tbody>
               <MatrixRow
                 label="Quantity"
-                values={getMatrixValues(correlationData, "quantity")}
+                values={matrix.quantity}
               />
 
               <MatrixRow
                 label="Unit Price"
-                values={getMatrixValues(correlationData, "unitPrice")}
+                values={matrix.unitPrice}
               />
 
               <MatrixRow
                 label="Revenue"
-                values={getMatrixValues(correlationData, "revenue")}
+                values={matrix.revenue}
               />
             </tbody>
           </table>
@@ -324,14 +587,21 @@ function Correlation() {
         <div className="note-mark">!</div>
 
         <div>
-          <span className="studio-label">ANALYTICAL NOTE</span>
+          <span className="studio-label">
+            ANALYTICAL NOTE
+          </span>
 
-          <h2>CORRELATION IS NOT CAUSATION</h2>
+          <h2>
+            CORRELATION IS NOT CAUSATION
+          </h2>
 
           <p>
-            A correlation coefficient describes the strength and direction of
-            a linear relationship between two variables. It does not by itself
-            establish that one variable causes changes in another variable.
+            A correlation coefficient describes
+            the strength and direction of a
+            linear relationship between two
+            variables. It does not by itself
+            establish that one variable causes
+            changes in another variable.
           </p>
         </div>
       </section>
@@ -339,8 +609,17 @@ function Correlation() {
   );
 }
 
+/*
+ * Pearson correlation
+ *
+ * This receives the COMPLETE arrays.
+ * No sampling happens here.
+ */
 function pearsonCorrelation(x, y) {
-  if (!x.length || x.length !== y.length) {
+  if (
+    !x.length ||
+    x.length !== y.length
+  ) {
     return 0;
   }
 
@@ -351,16 +630,30 @@ function pearsonCorrelation(x, y) {
   let denominatorX = 0;
   let denominatorY = 0;
 
-  for (let i = 0; i < x.length; i += 1) {
-    const differenceX = x[i] - meanX;
-    const differenceY = y[i] - meanY;
+  for (
+    let i = 0;
+    i < x.length;
+    i += 1
+  ) {
+    const differenceX =
+      x[i] - meanX;
 
-    numerator += differenceX * differenceY;
-    denominatorX += differenceX ** 2;
-    denominatorY += differenceY ** 2;
+    const differenceY =
+      y[i] - meanY;
+
+    numerator +=
+      differenceX * differenceY;
+
+    denominatorX +=
+      differenceX ** 2;
+
+    denominatorY +=
+      differenceY ** 2;
   }
 
-  const denominator = Math.sqrt(denominatorX * denominatorY);
+  const denominator = Math.sqrt(
+    denominatorX * denominatorY
+  );
 
   if (denominator === 0) {
     return 0;
@@ -374,68 +667,144 @@ function average(values) {
     return 0;
   }
 
-  return values.reduce((sum, value) => sum + value, 0) / values.length;
+  return (
+    values.reduce(
+      (sum, value) =>
+        sum + value,
+      0
+    ) / values.length
+  );
+}
+
+/*
+ * Evenly samples the dataset for visualization.
+ *
+ * Example:
+ * 524,878 records
+ *        ↓
+ * 1,500 displayed points
+ *
+ * This DOES NOT affect Pearson r.
+ */
+function createScatterSample(
+  rows,
+  maxPoints
+) {
+  if (rows.length <= maxPoints) {
+    return rows;
+  }
+
+  const sample = new Array(
+    maxPoints
+  );
+
+  const step =
+    (rows.length - 1) /
+    (maxPoints - 1);
+
+  for (
+    let i = 0;
+    i < maxPoints;
+    i += 1
+  ) {
+    const index = Math.round(
+      i * step
+    );
+
+    sample[i] = rows[index];
+  }
+
+  return sample;
 }
 
 function getStrength(value) {
   const absolute = Math.abs(value);
 
-  if (absolute >= 0.8) return "Very Strong";
-  if (absolute >= 0.6) return "Strong";
-  if (absolute >= 0.4) return "Moderate";
-  if (absolute >= 0.2) return "Weak";
+  if (absolute >= 0.8)
+    return "Very Strong";
+
+  if (absolute >= 0.6)
+    return "Strong";
+
+  if (absolute >= 0.4)
+    return "Moderate";
+
+  if (absolute >= 0.2)
+    return "Weak";
 
   return "Very Weak";
 }
 
 function getDirection(value) {
-  if (value > 0.05) return "POSITIVE";
-  if (value < -0.05) return "NEGATIVE";
+  if (value > 0.05)
+    return "POSITIVE";
+
+  if (value < -0.05)
+    return "NEGATIVE";
 
   return "NEUTRAL";
 }
 
-function getInterpretation(coefficient, variableA, variableB) {
-  const absolute = Math.abs(coefficient);
+function getInterpretation(
+  coefficient,
+  variableA,
+  variableB
+) {
+  const absolute =
+    Math.abs(coefficient);
 
   if (absolute < 0.2) {
     return `The calculated Pearson correlation between ${variableA} and ${variableB} indicates a very weak linear relationship in the current dataset. Changes in one variable show little linear association with changes in the other.`;
   }
 
   if (coefficient >= 0) {
-    return `The calculated Pearson correlation between ${variableA} and ${variableB} is positive. Higher values of ${variableA} tend to be associated with higher values of ${variableB} within the observed records. The strength of this relationship is ${getStrength(coefficient).toLowerCase()}.`;
+    return `The calculated Pearson correlation between ${variableA} and ${variableB} is positive. Higher values of ${variableA} tend to be associated with higher values of ${variableB} within the observed records. The strength of this relationship is ${getStrength(
+      coefficient
+    ).toLowerCase()}.`;
   }
 
-  return `The calculated Pearson correlation between ${variableA} and ${variableB} is negative. Higher values of ${variableA} tend to be associated with lower values of ${variableB} within the observed records. The strength of this relationship is ${getStrength(coefficient).toLowerCase()}.`;
+  return `The calculated Pearson correlation between ${variableA} and ${variableB} is negative. Higher values of ${variableA} tend to be associated with lower values of ${variableB} within the observed records. The strength of this relationship is ${getStrength(
+    coefficient
+  ).toLowerCase()}.`;
 }
 
-function getMatrixValues(data, variable) {
-  const findCoefficient = (id) =>
-    data.find((item) => item.id === id)?.coefficient ?? 0;
+function calculateDirectCorrelation(
+  records,
+  a,
+  b
+) {
+  const x = [];
+  const y = [];
 
-  if (variable === "quantity") {
-    return [1, findCoefficient("quantity-price"), findCoefficient("quantity-revenue")];
+  for (
+    let i = 0;
+    i < records.length;
+    i += 1
+  ) {
+    const valueA = Number(
+      records[i][a]
+    );
+
+    const valueB = Number(
+      records[i][b]
+    );
+
+    if (
+      Number.isFinite(valueA) &&
+      Number.isFinite(valueB)
+    ) {
+      x.push(valueA);
+      y.push(valueB);
+    }
   }
-
-  if (variable === "unitPrice") {
-    return [findCoefficient("quantity-price"), 1, calculateDirectCorrelation("unitPrice", "revenue")];
-  }
-
-  return [
-    findCoefficient("quantity-revenue"),
-    calculateDirectCorrelation("unitPrice", "revenue"),
-    1,
-  ];
-}
-
-function calculateDirectCorrelation(a, b) {
-  const x = salesRecords.map((row) => Number(row[a] || 0));
-  const y = salesRecords.map((row) => Number(row[b] || 0));
 
   return pearsonCorrelation(x, y);
 }
 
-function MatrixRow({ label, values }) {
+function MatrixRow({
+  label,
+  values,
+}) {
   return (
     <tr>
       <th>{label}</th>
@@ -451,7 +820,9 @@ function MatrixRow({ label, values }) {
               : "matrix-neutral"
           }
         >
-          {value === 1 ? "1.000" : value.toFixed(3)}
+          {value === 1
+            ? "1.000"
+            : value.toFixed(3)}
         </td>
       ))}
     </tr>

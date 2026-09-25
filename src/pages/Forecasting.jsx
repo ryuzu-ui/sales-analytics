@@ -7,7 +7,6 @@ import {
   YAxis,
   CartesianGrid,
   Tooltip,
-  Legend,
 } from "recharts";
 import {
   TrendingUp,
@@ -19,51 +18,90 @@ import {
   ArrowDownRight,
   Info,
 } from "lucide-react";
-import { monthlySales } from "../data/salesData";
+
+import { useSalesData } from "../context/SalesDataContext";
 
 function linearRegression(data) {
   const n = data.length;
 
-  const x = data.map((_, index) => index + 1);
-  const y = data.map((item) => item.revenue);
+  if (!n) {
+    return {
+      slope: 0,
+      intercept: 0,
+      predict: () => 0,
+      predictions: [],
+      r2: 0,
+      mae: 0,
+    };
+  }
 
-  const xMean = x.reduce((sum, value) => sum + value, 0) / n;
-  const yMean = y.reduce((sum, value) => sum + value, 0) / n;
+  const x = data.map((_, index) => index + 1);
+  const y = data.map((item) => Number(item.revenue) || 0);
+
+  const xMean =
+    x.reduce((sum, value) => sum + value, 0) / n;
+
+  const yMean =
+    y.reduce((sum, value) => sum + value, 0) / n;
 
   let numerator = 0;
   let denominator = 0;
 
   for (let i = 0; i < n; i += 1) {
-    numerator += (x[i] - xMean) * (y[i] - yMean);
-    denominator += (x[i] - xMean) ** 2;
+    numerator +=
+      (x[i] - xMean) * (y[i] - yMean);
+
+    denominator +=
+      (x[i] - xMean) ** 2;
   }
 
-  const slope = denominator === 0 ? 0 : numerator / denominator;
-  const intercept = yMean - slope * xMean;
+  const slope =
+    denominator === 0
+      ? 0
+      : numerator / denominator;
 
-  const predict = (period) => intercept + slope * period;
+  const intercept =
+    yMean - slope * xMean;
 
-  const predictions = data.map((item, index) => ({
-    ...item,
-    predicted: predict(index + 1),
-  }));
+  const predict = (period) =>
+    intercept + slope * period;
+
+  const predictions = data.map(
+    (item, index) => ({
+      ...item,
+      predicted: predict(index + 1),
+    })
+  );
 
   const ssTotal = y.reduce(
-    (sum, value) => sum + (value - yMean) ** 2,
+    (sum, value) =>
+      sum + (value - yMean) ** 2,
     0
   );
 
   const ssResidual = predictions.reduce(
-    (sum, item) => sum + (item.revenue - item.predicted) ** 2,
+    (sum, item) =>
+      sum +
+      (item.revenue - item.predicted) ** 2,
     0
   );
 
   const r2 =
-    ssTotal === 0 ? 0 : Math.max(0, 1 - ssResidual / ssTotal);
+    ssTotal === 0
+      ? 0
+      : Math.max(
+          0,
+          1 - ssResidual / ssTotal
+        );
 
   const mae =
     predictions.reduce(
-      (sum, item) => sum + Math.abs(item.revenue - item.predicted),
+      (sum, item) =>
+        sum +
+        Math.abs(
+          item.revenue -
+            item.predicted
+        ),
       0
     ) / n;
 
@@ -78,22 +116,53 @@ function linearRegression(data) {
 }
 
 function formatCurrency(value) {
-  return `₱${Math.round(value).toLocaleString("en-PH")}`;
+  const number = Number(value);
+
+  if (!Number.isFinite(number)) {
+    return "£0.00";
+  }
+
+  return `£${number.toLocaleString(
+    "en-GB",
+    {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    }
+  )}`;
 }
 
 function formatCompactCurrency(value) {
-  if (Math.abs(value) >= 1000000) {
-    return `₱${(value / 1000000).toFixed(1)}M`;
+  const number = Number(value);
+
+  if (!Number.isFinite(number)) {
+    return "£0.00";
   }
 
-  if (Math.abs(value) >= 1000) {
-    return `₱${(value / 1000).toFixed(0)}K`;
+  if (Math.abs(number) >= 1000000) {
+    return `£${(
+      number / 1000000
+    ).toFixed(1)}M`;
   }
 
-  return `₱${Math.round(value).toLocaleString("en-PH")}`;
+  if (Math.abs(number) >= 1000) {
+    return `£${(
+      number / 1000
+    ).toFixed(0)}K`;
+  }
+
+  return `£${number.toLocaleString(
+    "en-GB",
+    {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    }
+  )}`;
 }
 
-function getNextMonthLabel(lastMonth, offset) {
+function getNextMonthLabel(
+  lastMonth,
+  offset
+) {
   const monthNames = [
     "Jan",
     "Feb",
@@ -109,85 +178,177 @@ function getNextMonthLabel(lastMonth, offset) {
     "Dec",
   ];
 
-  const lastIndex = monthNames.indexOf(lastMonth);
+  const lastIndex =
+    monthNames.indexOf(lastMonth);
 
   if (lastIndex === -1) {
     return `M+${offset}`;
   }
 
-  return monthNames[(lastIndex + offset) % 12];
+  return monthNames[
+    (lastIndex + offset) % 12
+  ];
 }
 
 function Forecasting() {
-  const [forecastPeriods, setForecastPeriods] = useState(6);
+  const [forecastPeriods, setForecastPeriods] =
+    useState(6);
 
-  const model = useMemo(
-    () => linearRegression(monthlySales),
-    []
-  );
+  const {
+    monthlySales,
+    isImported,
+    isCleaned,
+  } = useSalesData();
 
-  const lastActual = monthlySales[monthlySales.length - 1].revenue;
+  /*
+   * The regression uses the already aggregated
+   * monthly sales data from SalesDataContext.
+   *
+   * It does NOT loop through all 524,878
+   * transaction records here.
+   */
+  const model = useMemo(() => {
+    return linearRegression(
+      monthlySales || []
+    );
+  }, [monthlySales]);
+
+  const hasData =
+    isImported &&
+    isCleaned &&
+    monthlySales &&
+    monthlySales.length > 0;
+
+  const lastActual = hasData
+    ? Number(
+        monthlySales[
+          monthlySales.length - 1
+        ].revenue
+      ) || 0
+    : 0;
 
   const forecastData = useMemo(() => {
-    return Array.from({ length: forecastPeriods }, (_, index) => {
-      const period = monthlySales.length + index + 1;
-      const predicted = Math.max(0, model.predict(period));
+    if (!hasData) {
+      return [];
+    }
 
-      const previousValue =
-        index === 0
-          ? lastActual
-          : Math.max(0, model.predict(period - 1));
+    return Array.from(
+      {
+        length: forecastPeriods,
+      },
+      (_, index) => {
+        const period =
+          monthlySales.length +
+          index +
+          1;
 
-      const change =
-        previousValue === 0
-          ? 0
-          : ((predicted - previousValue) / previousValue) * 100;
+        const predicted = Math.max(
+          0,
+          model.predict(period)
+        );
 
-      return {
-        period,
-        month: getNextMonthLabel(
-          monthlySales[monthlySales.length - 1].month,
-          index + 1
-        ),
-        forecast: predicted,
-        change,
-      };
-    });
-  }, [forecastPeriods, model, lastActual]);
+        const previousValue =
+          index === 0
+            ? lastActual
+            : Math.max(
+                0,
+                model.predict(period - 1)
+              );
+
+        const change =
+          previousValue === 0
+            ? 0
+            : ((predicted -
+                previousValue) /
+                previousValue) *
+              100;
+
+        return {
+          period,
+
+          month:
+            getNextMonthLabel(
+              monthlySales[
+                monthlySales.length - 1
+              ].month,
+              index + 1
+            ),
+
+          forecast: predicted,
+          change,
+        };
+      }
+    );
+  }, [
+    hasData,
+    forecastPeriods,
+    monthlySales,
+    model,
+    lastActual,
+  ]);
 
   const chartData = useMemo(() => {
-    const historical = monthlySales.map((item, index) => ({
-      month: item.month,
-      actual: item.revenue,
-      forecast: index === monthlySales.length - 1
-        ? item.revenue
-        : null,
-    }));
+    if (!hasData) {
+      return [];
+    }
 
-    const future = forecastData.map((item) => ({
-      month: item.month,
-      actual: null,
-      forecast: item.forecast,
-    }));
+    const historical =
+      monthlySales.map(
+        (item, index) => ({
+          month: item.month,
+          actual: item.revenue,
 
-    return [...historical, ...future];
-  }, [forecastData]);
+          forecast:
+            index ===
+            monthlySales.length - 1
+              ? item.revenue
+              : null,
+        })
+      );
+
+    const future =
+      forecastData.map((item) => ({
+        month: item.month,
+        actual: null,
+        forecast:
+          item.forecast,
+      }));
+
+    return [
+      ...historical,
+      ...future,
+    ];
+  }, [
+    hasData,
+    monthlySales,
+    forecastData,
+  ]);
 
   const averageForecast =
     forecastData.length > 0
-      ? forecastData.reduce((sum, item) => sum + item.forecast, 0) /
-        forecastData.length
+      ? forecastData.reduce(
+          (sum, item) =>
+            sum + item.forecast,
+          0
+        ) / forecastData.length
       : 0;
 
-  const totalForecast = forecastData.reduce(
-    (sum, item) => sum + item.forecast,
-    0
-  );
+  const totalForecast =
+    forecastData.reduce(
+      (sum, item) =>
+        sum + item.forecast,
+      0
+    );
 
   const forecastGrowth =
     lastActual === 0
       ? 0
-      : ((forecastData[0]?.forecast - lastActual) / lastActual) * 100;
+      : forecastData.length > 0
+      ? ((forecastData[0].forecast -
+          lastActual) /
+          lastActual) *
+        100
+      : 0;
 
   const trendDirection =
     model.slope > 0
@@ -196,12 +357,77 @@ function Forecasting() {
       ? "Decreasing"
       : "Stable";
 
+  /*
+   * EMPTY STATE
+   */
+  if (!hasData) {
+    return (
+      <div className="forecast-page">
+        <section className="forecast-heading">
+          <div>
+            <div className="section-kicker">
+              <span className="kicker-block">
+                07
+              </span>
+
+              PREDICTIVE ANALYSIS
+            </div>
+
+            <h1>
+              SALES
+              <br />
+              <span>FORECASTING.</span>
+            </h1>
+
+            <p>
+              Import and clean a sales dataset
+              to generate a regression-based
+              revenue forecast.
+            </p>
+          </div>
+        </section>
+
+        <section className="forecast-insight-card">
+          <div className="insight-number">
+            01
+          </div>
+
+          <div>
+            <span className="forecast-card-kicker">
+              DATA REQUIRED
+            </span>
+
+            <h2>
+              No cleaned sales data available
+            </h2>
+
+            <p>
+              Import the UCI Online Retail
+              dataset using the{" "}
+              <strong>
+                Import Data
+              </strong>{" "}
+              button in the top navigation,
+              then clean the dataset in Data
+              Studio before generating a
+              forecast.
+            </p>
+          </div>
+        </section>
+      </div>
+    );
+  }
+
   return (
     <div className="forecast-page">
+      {/* HEADER */}
       <section className="forecast-heading">
         <div>
           <div className="section-kicker">
-            <span className="kicker-block">07</span>
+            <span className="kicker-block">
+              07
+            </span>
+
             PREDICTIVE ANALYSIS
           </div>
 
@@ -212,8 +438,9 @@ function Forecasting() {
           </h1>
 
           <p>
-            Use historical sales data to estimate future revenue
-            using a regression-based predictive model.
+            Use historical sales data to
+            estimate future revenue using a
+            regression-based predictive model.
           </p>
         </div>
 
@@ -224,78 +451,132 @@ function Forecasting() {
           </div>
 
           <div className="forecast-period-buttons">
-            {[3, 6, 12].map((period) => (
-              <button
-                key={period}
-                type="button"
-                className={
-                  forecastPeriods === period
-                    ? "forecast-period active"
-                    : "forecast-period"
-                }
-                onClick={() => setForecastPeriods(period)}
-              >
-                {period}M
-              </button>
-            ))}
+            {[3, 6, 12].map(
+              (period) => (
+                <button
+                  key={period}
+                  type="button"
+                  className={
+                    forecastPeriods ===
+                    period
+                      ? "forecast-period active"
+                      : "forecast-period"
+                  }
+                  onClick={() =>
+                    setForecastPeriods(
+                      period
+                    )
+                  }
+                >
+                  {period}M
+                </button>
+              )
+            )}
           </div>
         </div>
       </section>
 
+      {/* KPI CARDS */}
       <section className="forecast-kpi-grid">
         <article className="forecast-kpi kpi-purple">
           <div className="forecast-kpi-top">
-            <span>MODEL TREND</span>
+            <span>
+              MODEL TREND
+            </span>
+
             <TrendingUp size={22} />
           </div>
 
-          <strong>{trendDirection}</strong>
+          <strong>
+            {trendDirection}
+          </strong>
 
           <p>
-            {formatCurrency(Math.abs(model.slope))} average
-            monthly trend
+            {formatCurrency(
+              Math.abs(model.slope)
+            )}{" "}
+            average monthly trend
           </p>
         </article>
 
         <article className="forecast-kpi kpi-yellow">
           <div className="forecast-kpi-top">
-            <span>NEXT PERIOD</span>
-            <ArrowUpRight size={22} />
+            <span>
+              NEXT PERIOD
+            </span>
+
+            {forecastGrowth >= 0 ? (
+              <ArrowUpRight
+                size={22}
+              />
+            ) : (
+              <ArrowDownRight
+                size={22}
+              />
+            )}
           </div>
 
           <strong>
-            {formatCompactCurrency(forecastData[0]?.forecast || 0)}
+            {formatCompactCurrency(
+              forecastData[0]
+                ?.forecast || 0
+            )}
           </strong>
 
           <p>
-            {forecastGrowth >= 0 ? "+" : ""}
-            {forecastGrowth.toFixed(1)}% vs latest actual
+            {forecastGrowth >= 0
+              ? "+"
+              : ""}
+            {forecastGrowth.toFixed(
+              1
+            )}
+            % vs latest actual
           </p>
         </article>
 
         <article className="forecast-kpi kpi-pink">
           <div className="forecast-kpi-top">
-            <span>MODEL R²</span>
+            <span>
+              MODEL R²
+            </span>
+
             <Target size={22} />
           </div>
 
-          <strong>{(model.r2 * 100).toFixed(1)}%</strong>
+          <strong>
+            {(model.r2 * 100).toFixed(
+              1
+            )}
+            %
+          </strong>
 
-          <p>Training model fit</p>
+          <p>
+            Training model fit
+          </p>
         </article>
 
         <article className="forecast-kpi kpi-white">
           <div className="forecast-kpi-top">
-            <span>AVERAGE FORECAST</span>
+            <span>
+              AVERAGE FORECAST
+            </span>
+
             <Calculator size={22} />
           </div>
 
-          <strong>{formatCompactCurrency(averageForecast)}</strong>
+          <strong>
+            {formatCompactCurrency(
+              averageForecast
+            )}
+          </strong>
 
-          <p>Expected monthly revenue</p>
+          <p>
+            Expected monthly revenue
+          </p>
         </article>
       </section>
 
+      {/* MAIN FORECAST */}
       <section className="forecast-main-grid">
         <div className="forecast-chart-card">
           <div className="forecast-card-header">
@@ -303,7 +584,10 @@ function Forecasting() {
               <span className="forecast-card-kicker">
                 HISTORICAL + PREDICTED
               </span>
-              <h2>Revenue Forecast</h2>
+
+              <h2>
+                Revenue Forecast
+              </h2>
             </div>
 
             <div className="forecast-legend">
@@ -320,7 +604,10 @@ function Forecasting() {
           </div>
 
           <div className="forecast-chart">
-            <ResponsiveContainer width="100%" height={400}>
+            <ResponsiveContainer
+              width="100%"
+              height={400}
+            >
               <LineChart
                 data={chartData}
                 margin={{
@@ -351,7 +638,9 @@ function Forecasting() {
                 />
 
                 <YAxis
-                  tickFormatter={formatCompactCurrency}
+                  tickFormatter={
+                    formatCompactCurrency
+                  }
                   tick={{
                     fill: "#000",
                     fontSize: 12,
@@ -365,23 +654,26 @@ function Forecasting() {
                 />
 
                 <Tooltip
-                  formatter={(value, name) => [
-                    formatCurrency(value),
-                    name === "actual" ? "Actual" : "Forecast",
+                  formatter={(
+                    value,
+                    name
+                  ) => [
+                    formatCurrency(
+                      value
+                    ),
+                    name ===
+                    "actual"
+                      ? "Actual"
+                      : "Forecast",
                   ]}
                   contentStyle={{
-                    border: "3px solid #000",
-                    borderRadius: "0px",
-                    boxShadow: "5px 5px 0 #000",
+                    border:
+                      "3px solid #000",
+                    borderRadius:
+                      "0px",
+                    boxShadow:
+                      "5px 5px 0 #000",
                     fontWeight: 700,
-                  }}
-                />
-
-                <Legend
-                  verticalAlign="top"
-                  height={0}
-                  wrapperStyle={{
-                    display: "none",
                   }}
                 />
 
@@ -433,13 +725,17 @@ function Forecasting() {
 
           <div className="forecast-chart-note">
             <Info size={18} />
+
             <span>
-              Forecast values are calculated from the historical
-              monthly revenue trend using simple linear regression.
+              Forecast values are calculated
+              from the historical monthly
+              revenue trend using simple linear
+              regression.
             </span>
           </div>
         </div>
 
+        {/* MODEL CARD */}
         <aside className="model-card">
           <div className="model-card-header">
             <div className="model-icon">
@@ -448,58 +744,93 @@ function Forecasting() {
 
             <div>
               <span>MODEL</span>
-              <h3>Linear Regression</h3>
+
+              <h3>
+                Linear Regression
+              </h3>
             </div>
           </div>
 
           <div className="model-equation">
-            <span>FORECAST EQUATION</span>
+            <span>
+              FORECAST EQUATION
+            </span>
 
             <strong>
-              y = {model.slope.toFixed(2)}x{" "}
-              {model.intercept >= 0 ? "+" : "−"}{" "}
-              {Math.abs(model.intercept).toFixed(2)}
+              y ={" "}
+              {model.slope.toFixed(2)}
+              x{" "}
+              {model.intercept >= 0
+                ? "+"
+                : "−"}{" "}
+              {Math.abs(
+                model.intercept
+              ).toFixed(2)}
             </strong>
           </div>
 
           <div className="model-metrics">
             <div>
               <span>SLOPE</span>
+
               <strong>
-                {model.slope >= 0 ? "+" : ""}
-                {formatCurrency(model.slope)}
+                {model.slope >= 0
+                  ? "+"
+                  : ""}
+                {formatCurrency(
+                  model.slope
+                )}
               </strong>
             </div>
 
             <div>
-              <span>INTERCEPT</span>
+              <span>
+                INTERCEPT
+              </span>
+
               <strong>
-                {formatCurrency(model.intercept)}
+                {formatCurrency(
+                  model.intercept
+                )}
               </strong>
             </div>
 
             <div>
-              <span>TRAINING R²</span>
+              <span>
+                TRAINING R²
+              </span>
+
               <strong>
-                {(model.r2 * 100).toFixed(2)}%
+                {(model.r2 * 100).toFixed(
+                  2
+                )}
+                %
               </strong>
             </div>
 
             <div>
-              <span>TRAINING MAE</span>
+              <span>
+                TRAINING MAE
+              </span>
+
               <strong>
-                {formatCurrency(model.mae)}
+                {formatCurrency(
+                  model.mae
+                )}
               </strong>
             </div>
           </div>
 
           <div className="model-explanation">
-            <strong>HOW IT WORKS</strong>
+            <strong>
+              HOW IT WORKS
+            </strong>
 
             <p>
-              The model identifies the historical relationship
-              between time and revenue, then extends that trend
-              into future periods.
+              The model identifies the
+              historical relationship between
+              time and revenue, then extends
+              that trend into future periods.
             </p>
           </div>
 
@@ -507,14 +838,16 @@ function Forecasting() {
             <Info size={17} />
 
             <span>
-              R² and MAE shown here describe the model's fit to
-              the available historical data. They are not
+              R² and MAE shown here describe
+              the model's fit to the available
+              historical data. They are not
               independent validation scores.
             </span>
           </div>
         </aside>
       </section>
 
+      {/* FORECAST TABLE */}
       <section className="forecast-table-card">
         <div className="forecast-table-header">
           <div>
@@ -523,13 +856,21 @@ function Forecasting() {
             </span>
 
             <h2>
-              Next {forecastPeriods} Months
+              Next {forecastPeriods}{" "}
+              Months
             </h2>
           </div>
 
           <div className="forecast-total">
-            <span>TOTAL FORECAST</span>
-            <strong>{formatCurrency(totalForecast)}</strong>
+            <span>
+              TOTAL FORECAST
+            </span>
+
+            <strong>
+              {formatCurrency(
+                totalForecast
+              )}
+            </strong>
           </div>
         </div>
 
@@ -539,96 +880,134 @@ function Forecasting() {
               <tr>
                 <th>#</th>
                 <th>PERIOD</th>
-                <th>PREDICTED REVENUE</th>
-                <th>CHANGE VS PREVIOUS</th>
+                <th>
+                  PREDICTED REVENUE
+                </th>
+                <th>
+                  CHANGE VS PREVIOUS
+                </th>
                 <th>TREND</th>
               </tr>
             </thead>
 
             <tbody>
-              {forecastData.map((item, index) => (
-                <tr key={`${item.month}-${item.period}`}>
-                  <td className="forecast-index">
-                    {String(index + 1).padStart(2, "0")}
-                  </td>
+              {forecastData.map(
+                (item, index) => (
+                  <tr
+                    key={`${item.month}-${item.period}`}
+                  >
+                    <td className="forecast-index">
+                      {String(
+                        index + 1
+                      ).padStart(2, "0")}
+                    </td>
 
-                  <td className="forecast-month">
-                    {item.month}
-                  </td>
+                    <td className="forecast-month">
+                      {item.month}
+                    </td>
 
-                  <td className="forecast-value">
-                    {formatCurrency(item.forecast)}
-                  </td>
-
-                  <td>
-                    <span
-                      className={
-                        item.change >= 0
-                          ? "change-pill positive"
-                          : "change-pill negative"
-                      }
-                    >
-                      {item.change >= 0 ? (
-                        <ArrowUpRight size={15} />
-                      ) : (
-                        <ArrowDownRight size={15} />
+                    <td className="forecast-value">
+                      {formatCurrency(
+                        item.forecast
                       )}
+                    </td>
 
-                      {item.change >= 0 ? "+" : ""}
-                      {item.change.toFixed(1)}%
-                    </span>
-                  </td>
+                    <td>
+                      <span
+                        className={
+                          item.change >=
+                          0
+                            ? "change-pill positive"
+                            : "change-pill negative"
+                        }
+                      >
+                        {item.change >=
+                        0 ? (
+                          <ArrowUpRight
+                            size={15}
+                          />
+                        ) : (
+                          <ArrowDownRight
+                            size={15}
+                          />
+                        )}
 
-                  <td>
-                    <span
-                      className={
-                        item.change >= 0
-                          ? "trend-badge trend-up"
-                          : "trend-badge trend-down"
-                      }
-                    >
-                      {item.change >= 0
-                        ? "GROWING"
-                        : "DECLINING"}
-                    </span>
-                  </td>
-                </tr>
-              ))}
+                        {item.change >=
+                        0
+                          ? "+"
+                          : ""}
+                        {item.change.toFixed(
+                          1
+                        )}
+                        %
+                      </span>
+                    </td>
+
+                    <td>
+                      <span
+                        className={
+                          item.change >=
+                          0
+                            ? "trend-badge trend-up"
+                            : "trend-badge trend-down"
+                        }
+                      >
+                        {item.change >=
+                        0
+                          ? "GROWING"
+                          : "DECLINING"}
+                      </span>
+                    </td>
+                  </tr>
+                )
+              )}
             </tbody>
           </table>
         </div>
       </section>
 
+      {/* BOTTOM */}
       <section className="forecast-bottom-grid">
         <article className="forecast-insight-card">
-          <div className="insight-number">01</div>
+          <div className="insight-number">
+            01
+          </div>
 
           <div>
             <span className="forecast-card-kicker">
               FORECAST INTERPRETATION
             </span>
 
-            <h2>What does the model suggest?</h2>
+            <h2>
+              What does the model suggest?
+            </h2>
 
             <p>
-              Based on the historical dataset, the regression
-              model identifies an{" "}
-              <strong>{trendDirection.toLowerCase()}</strong>{" "}
-              revenue trend. The estimated next-period revenue
-              is{" "}
+              Based on the historical dataset,
+              the regression model identifies an{" "}
+              <strong>
+                {trendDirection.toLowerCase()}
+              </strong>{" "}
+              revenue trend. The estimated
+              next-period revenue is{" "}
               <strong>
                 {formatCurrency(
-                  forecastData[0]?.forecast || 0
+                  forecastData[0]
+                    ?.forecast || 0
                 )}
               </strong>
               .
             </p>
 
             <p>
-              Across the selected {forecastPeriods}-month
-              horizon, the estimated average monthly revenue is{" "}
+              Across the selected{" "}
+              {forecastPeriods}-month horizon,
+              the estimated average monthly
+              revenue is{" "}
               <strong>
-                {formatCurrency(averageForecast)}
+                {formatCurrency(
+                  averageForecast
+                )}
               </strong>
               .
             </p>
@@ -640,21 +1019,30 @@ function Forecasting() {
             PREDICTIVE ANALYSIS
           </span>
 
-          <h2>Why forecasting matters</h2>
+          <h2>
+            Why forecasting matters
+          </h2>
 
           <ul>
-            <li>Identifies expected future sales levels.</li>
             <li>
-              Converts historical patterns into measurable
-              predictions.
+              Identifies expected future
+              sales levels.
             </li>
+
             <li>
-              Supports planning and data-driven decision
-              making.
+              Converts historical patterns
+              into measurable predictions.
             </li>
+
             <li>
-              Provides a baseline for comparing future actual
-              sales against predictions.
+              Supports planning and
+              data-driven decision making.
+            </li>
+
+            <li>
+              Provides a baseline for
+              comparing future actual sales
+              against predictions.
             </li>
           </ul>
         </article>
