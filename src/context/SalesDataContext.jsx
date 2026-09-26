@@ -665,6 +665,7 @@ export function SalesDataProvider({ children }) {
       const normalized =
         normalizeSalesRows(rows);
 
+      // Replace the active dataset only after parsing and validation succeed.
       setRawRecords(normalized.records);
       setRecords(normalized.records);
 
@@ -686,13 +687,6 @@ export function SalesDataProvider({ children }) {
         error?.message ||
           "Unable to import the dataset."
       );
-
-      setRawRecords([]);
-      setRecords([]);
-      setSourceColumns([]);
-      setDatasetName("");
-      setIsCleaned(false);
-      setCleaningReport(null);
     } finally {
       setIsImporting(false);
     }
