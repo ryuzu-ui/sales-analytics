@@ -23,6 +23,7 @@ import {
 } from "recharts";
 
 import { useSalesData } from "../context/SalesDataContext";
+import { calculateQuarterlySales } from "../utils/quarterlySales";
 
 /* ============================================================
    FORMATTERS
@@ -445,44 +446,7 @@ function SalesAnalysis() {
     }
 
     if (period === "quarterly") {
-      const quarters = [
-        {
-          month: "Q1",
-          revenue: 0,
-        },
-        {
-          month: "Q2",
-          revenue: 0,
-        },
-        {
-          month: "Q3",
-          revenue: 0,
-        },
-        {
-          month: "Q4",
-          revenue: 0,
-        },
-      ];
-
-      monthlySales.forEach(
-        (item, index) => {
-          const quarter =
-            Math.floor(index / 3);
-
-          if (
-            quarters[quarter]
-          ) {
-            quarters[
-              quarter
-            ].revenue +=
-              Number(
-                item.revenue || 0
-              );
-          }
-        }
-      );
-
-      return quarters;
+      return calculateQuarterlySales(monthlySales);
     }
 
     return monthlySales.slice(-6);
@@ -752,12 +716,7 @@ function SalesAnalysis() {
                 />
 
                 <XAxis
-                  dataKey={
-                    period ===
-                    "quarterly"
-                      ? "month"
-                      : "label"
-                  }
+                  dataKey="label"
                   tick={{
                     fill: "#111",
                     fontSize: 11,
